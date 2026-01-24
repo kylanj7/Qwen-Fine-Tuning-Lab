@@ -1,0 +1,36 @@
+# Physics Dataset Configuration
+name: "Physics"
+dataset_name: "camel-ai/physics"
+domain: "Physics"
+split: "train"
+
+# Field mappings for this dataset
+fields:
+  instruction: "message_1"
+  response: "message_2"
+  context_fields:
+    - "topic;"
+    - "sub_topic"
+
+# Prompt template
+prompt_template: |
+  Below is an instruction that describes a physics task, paired with an input that provides further context. Write a response that appropriately completes the request.
+
+  ### Instruction:
+  {}
+
+  ### Input:
+  {}
+
+  ### Response:
+  {}
+
+# Context format (how to combine context fields)
+context_format: "Domain: {topic;} - {sub_topic}"
+
+# Train/val/test split ratios
+train_val_test_split:
+  train: 0.6
+  val: 0.2
+  test: 0.2
+  seed: 3407

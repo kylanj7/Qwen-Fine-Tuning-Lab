@@ -1,0 +1,31 @@
+# Materials Science Dataset Configuration
+name: "Materials Science"
+dataset_name: "AbdulrhmanEldeeb/metallurgy-qa"
+domain: "Materials Science"
+split: "train"
+
+# Field mappings for this dataset
+fields:
+  instruction: "question"
+  response: "answer"
+  context_fields: []
+
+# Prompt template
+prompt_template: |
+  Below is an instruction that describes a materials science task. Write a response that appropriately completes the request.
+
+  ### Instruction:
+  {}
+
+  ### Response:
+  {}
+
+# Context format (no context fields for this dataset)
+context_format: null
+
+# Train/val/test split ratios
+train_val_test_split:
+  train: 0.6
+  val: 0.2
+  test: 0.2
+  seed: 3407

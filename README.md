@@ -1,15 +1,42 @@
-# Nemotron-3-30B Quantum Physics Fine-Tuning & Inference
+# Qwen Fine-Tuning System
 
-This project fine-tunes NVIDIA's Nemotron-3-30B model on quantum physics datasets and provides a Streamlit chatbot interface for testing.
+A unified, configuration-driven pipeline for fine-tuning Qwen models on scientific datasets with automated evaluation.
 
-## 📋 Overview
+## Overview
 
-- **Model**: NVIDIA Nemotron-3-Nano-30B-A3B-BF16
-- **Dataset**: BoltzmannEntropy/QuantumLLMInstruct (500k+ quantum computing instruction pairs)
-- **Quantization**: FP4 (4-bit) for training, Q4_K_M GGUF for inference
-- **Framework**: Unsloth + LoRA fine-tuning
+- **Models**: Qwen 2.5 (7B, 14B, 32B) and Qwen 3 (4B, 8B, 14B, 32B)
+- **Datasets**: Chemistry, Quantum Physics, Biology, Physics, Math, Materials Science, MedMCQA, SciQ
+- **Quantization**: 4-bit NF4 for training, Q4_K_M GGUF for inference
+- **Framework**: Transformers + PEFT/LoRA + bitsandbytes
 
-## 🚀 Quick Start
+## Project Structure
+
+```
+.
+├── train.py                    # Unified training pipeline
+├── app.py                      # Streamlit test interface
+├── evaluate_model.py           # Model evaluation with LLM-as-judge
+├── merge_and_convert_gguff.py  # LoRA merge + GGUF conversion
+├── configs/
+│   ├── models/                 # Model configurations
+│   │   ├── qwen2.5-14b-instruct.yaml
+│   │   ├── qwen3-8b.yaml
+│   │   └── ...
+│   ├── datasets/               # Dataset configurations
+│   │   ├── chemistry.yaml
+│   │   ├── quantum.yaml
+│   │   └── ...
+│   └── training/               # Training configurations
+│       ├── default.yaml
+│       └── quick_test.yaml
+├── models/
+│   └── gguf/                   # GGUF models for inference
+│       ├── qwen_chemistry_merged-q4_k_m.gguf
+│       └── qwen_quantum_merged-q4_k_m.gguf
+└── outputs/                    # Training outputs and checkpoints
+```
+
+## Quick Start
 
 ### 1. Install Dependencies
 
@@ -17,186 +44,273 @@ This project fine-tunes NVIDIA's Nemotron-3-30B model on quantum physics dataset
 pip install -r requirements.txt
 ```
 
-### 2. Train the Model
+### 2. Train a Model
 
-Run the training script to fine-tune Nemotron-3 on quantum physics:
-
+Interactive mode (select model, dataset, and training config):
 ```bash
 python train.py
 ```
 
-**Training Process:**
-- Loads Nemotron-3-30B in FP4 quantization
-- Applies LoRA (Low-Rank Adaptation) fine-tuning
-- Trains on BoltzmannEntropy/QuantumLLMInstruct dataset
-- Converts to GGUF format automatically
-- Saves GGUF model in project directory
+Command-line mode:
+```bash
+python train.py --model qwen2.5-14b-instruct --dataset chemistry --training default
+```
 
-**Output:** `nemotron3_quantum_model-q4_k_m-unsloth.gguf`
+### 3. Convert to GGUF
 
-### 3. Test with Streamlit App
+After training, merge LoRA weights and convert to GGUF:
+```bash
+# Uses run metadata to auto-detect base model and generate proper filename
+python merge_and_convert_gguff.py --adapter-path outputs/qwen25-14b-instruct-chemistry-20260124-001/final_adapter
+```
 
-After training completes, run the chatbot interface:
+Output will be saved to `models/gguf/` with naming convention:
+```
+{model}-{size}-{dataset}-{timestamp}-{index}-{quantization}.gguf
+```
+
+Example: `qwen25-14b-instruct-chemistry-20260124-001-q4_k_m.gguf`
+
+### 4. Test with Streamlit
 
 ```bash
 streamlit run app.py
 ```
 
-The app will automatically detect and load available GGUF models.
+### 5. Evaluate Model Accuracy
 
-## 🎛️ Streamlit App Features
+```bash
+# List available datasets
+python evaluate_model.py --list-datasets
 
-### Model Controls
-- **Model Selection**: Choose from available GGUF models
-- **Context Length**: Adjust context window (512-32768 tokens)
-- **GPU Layers**: Control GPU offloading (-1 for full GPU)
-- **CPU Threads**: Set number of threads for CPU inference
+# Evaluate a model
+python evaluate_model.py --model qwen_chemistry:latest --dataset chemistry
 
-### Generation Parameters
-- **Max Tokens**: Control response length (1-4096)
-- **Temperature**: Adjust creativity (0.0-2.0)
-- **Top P**: Nucleus sampling threshold (0.0-1.0)
-- **Top K**: Top-K sampling limit (0-100)
-
-### Advanced Parameters
-- **Repeat Penalty**: Prevent repetition (1.0-2.0)
-- **Presence Penalty**: Token presence control (0.0-2.0)
-- **Frequency Penalty**: Frequency-based control (0.0-2.0)
-- **Mirostat Sampling**: Advanced sampling modes (0, 1, 2)
-  - Mirostat Tau: Target entropy
-  - Mirostat Eta: Learning rate
-
-### Live Metrics
-- **Tokens/Second**: Real-time generation speed
-- **Tokens Generated**: Total token count
-- **Elapsed Time**: Time tracking
-- **Streaming Output**: Live text generation
-
-### System Prompt
-Customize the model's behavior with custom system prompts for different quantum physics tasks.
-
-## 📊 Training Configuration
-
-### Active Parameters
-```python
-per_device_train_batch_size = 2
-gradient_accumulation_steps = 4
-warmup_steps = 5
-max_steps = 20
-learning_rate = 2e-4
-weight_decay = 0.01
-lr_scheduler_type = "linear"
-optimizer = "adamw_8bit"
+# Evaluate with more samples, no web search
+python evaluate_model.py --model my_model:latest --dataset quantum --max_samples 200 --no-web-search
 ```
 
-### LoRA Configuration
-```python
-r = 16  # LoRA rank
-lora_alpha = 16
-lora_dropout = 0  # No dropout
-target_modules = ["q_proj", "k_proj", "v_proj", "o_proj",
-                  "gate_proj", "up_proj", "down_proj"]
+## Configuration System
+
+### Model Configs (`configs/models/`)
+
+Define model name, quantization, LoRA settings, and max sequence length:
+
+```yaml
+name: "Qwen 2.5 14B Instruct"
+model_name: "Qwen/Qwen2.5-14B-Instruct"
+size: "14B"
+
+quantization:
+  load_in_4bit: true
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_compute_dtype: "bfloat16"
+
+lora:
+  r: 16
+  lora_alpha: 16
+  target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+max_seq_length: 2048
 ```
 
-### Additional Parameters (Currently Set to 0)
-The training script includes robust parameter options that are currently disabled:
-- warmup_ratio
-- max_grad_norm
-- evaluation_strategy
-- save_strategy
-- label_smoothing_factor
-- And many more...
+### Dataset Configs (`configs/datasets/`)
 
-You can adjust these in `train.py` as needed for your specific use case.
+Define dataset source, field mappings, prompt template, and train/val/test splits:
 
-## 🔧 Hardware Requirements
+```yaml
+name: "Chemistry"
+dataset_name: "camel-ai/chemistry"
+domain: "Chemistry"
 
-### Minimum for Training
-- **GPU**: 24GB VRAM (RTX 3090, RTX 4090, A5000, etc.)
+fields:
+  instruction: "message_1"
+  response: "message_2"
+  context_fields: ["topic", "sub_topic"]
+
+prompt_template: |
+  Below is an instruction...
+  ### Instruction:
+  {}
+  ### Response:
+  {}
+
+train_val_test_split:
+  train: 0.6
+  val: 0.2
+  test: 0.2
+```
+
+### Training Configs (`configs/training/`)
+
+Define batch size, learning rate, scheduler, checkpointing:
+
+```yaml
+name: "default"
+per_device_train_batch_size: 4
+gradient_accumulation_steps: 4
+learning_rate: 5.0e-5
+lr_scheduler_type: "cosine"
+num_train_epochs: 1
+save_strategy: "steps"
+save_steps: 25
+eval_strategy: "steps"
+eval_steps: 25
+```
+
+## Training Log & Model Naming
+
+### Naming Convention
+
+Each training run generates a unique name:
+```
+{model}-{size}-{dataset}-{timestamp}-{index}
+```
+
+Example: `qwen25-14b-instruct-chemistry-20260124-001`
+
+Components:
+- **model**: Model name (e.g., `qwen25-14b-instruct`)
+- **size**: Parameter count (e.g., `14b`)
+- **dataset**: Dataset name (e.g., `chemistry`)
+- **timestamp**: Date in YYYYMMDD format
+- **index**: Auto-incrementing run number (001, 002, ...)
+
+### Training Log
+
+All training runs are logged to `training_log.md` with full configuration details:
+
+```markdown
+## Run #001: qwen25-14b-instruct-chemistry-20260124-001
+
+**Date:** 2026-01-24 10:30:00
+
+### Model Configuration
+| Parameter | Value |
+|-----------|-------|
+| Name | Qwen 2.5 14B Instruct |
+| HuggingFace ID | Qwen/Qwen2.5-14B-Instruct |
+| LoRA Rank (r) | 16 |
+...
+
+### Training Configuration
+| Parameter | Value |
+|-----------|-------|
+| Batch Size | 4 |
+| Learning Rate | 5e-5 |
+...
+```
+
+This makes it easy to:
+- Track all experiments in one place
+- Compare configurations between runs
+- Reproduce previous training runs
+- Document model provenance
+
+## Model Evaluation
+
+The evaluation system (`evaluate_model.py`) uses an **LLM-as-judge** approach:
+
+### How It Works
+
+1. **Load Test Data**: Uses the 20% test split from the dataset config
+2. **Get Model Response**: Queries your fine-tuned model via Ollama
+3. **Gather References**: Combines ground truth + optional web search results
+4. **Judge Scoring**: A larger model (default: gpt-oss:120b) scores the answer:
+   - **CORRECT (1.0)**: Accurate and complete
+   - **PARTIAL (0.5)**: Core concept right, minor issues
+   - **INCORRECT (0.0)**: Wrong facts or off-topic
+
+### Output
+
+```
+============================================================
+CHEMISTRY MODEL EVALUATION RESULTS
+============================================================
+Evaluation Date: 2026-01-24 10:30:00
+Test Model: qwen_chemistry:latest
+Judge Model: gpt-oss:120b
+Dataset: camel-ai/chemistry
+Total Samples: 100
+
+------------------------------------------------------------
+OVERALL SCORES
+------------------------------------------------------------
+Fully Correct:       72 (72.0%)
+Partially Correct:   18 (18.0%)
+Incorrect:           10 (10.0%)
+
+RAW ACCURACY SCORE: 81.0%
+
+------------------------------------------------------------
+SCORES BY TOPIC
+------------------------------------------------------------
+Organic Chemistry                    87.5% (n=24)
+Physical Chemistry                   82.0% (n=20)
+...
+```
+
+Results are saved to `evaluation_results/` as JSON (detailed) and TXT (report).
+
+## Streamlit Test Interface
+
+The app provides:
+
+- **Model Selection**: Auto-detects GGUF models in `models/gguf/`
+- **GPU Acceleration**: Full GPU offloading with llama-cpp-python
+- **Generation Controls**: Temperature, top-p, top-k, max tokens
+- **Live Metrics**: Tokens/second, total tokens, elapsed time
+- **Custom System Prompts**: Adjust model behavior
+
+## Hardware Requirements
+
+### Training
+- **GPU**: 24GB+ VRAM (RTX 3090/4090, A5000, A100)
 - **RAM**: 32GB system RAM
 - **Storage**: 50GB free space
 
-### Minimum for Inference (GGUF)
-- **RAM/VRAM**: 16GB (can run on CPU or GPU)
-- **Storage**: 20GB free space
+### Inference (GGUF)
+- **RAM/VRAM**: 16GB minimum
+- **Storage**: 20GB per model
 
-## 📁 Project Structure
+## Available Datasets
 
-```
-.
-├── train.py                    # Training script
-├── app.py                      # Streamlit chatbot interface
-├── requirements.txt            # Python dependencies
-├── README.md                   # This file
-├── outputs/                    # Training outputs
-├── nemotron3_quantum_model/    # Saved model (safetensors)
-└── nemotron3_quantum_model-q4_k_m-unsloth.gguf  # GGUF model
-```
+| Config Name | Dataset | Domain |
+|-------------|---------|--------|
+| `chemistry` | camel-ai/chemistry | Chemistry |
+| `quantum` | BoltzmannEntropy/QuantumLLMInstruct | Quantum Physics |
+| `physics` | camel-ai/physics | Physics |
+| `biology` | camel-ai/biology | Biology |
+| `math` | camel-ai/math | Mathematics |
+| `materials-science` | pranked03/materials_science_dataset | Materials Science |
+| `medmcqa` | openlifescienceai/medmcqa | Medical (MCQ) |
+| `sciq` | allenai/sciq | Science (MCQ) |
 
-## 🧪 Dataset Information
-
-**BoltzmannEntropy/QuantumLLMInstruct** contains:
-- 500,000+ instruction-following pairs
-- 90 quantum computing domains
-- Topics include:
-  - Hamiltonian dynamics
-  - Quantum circuit optimization
-  - Yang-Baxter solvability
-  - Variational Quantum Eigensolvers (VQE)
-  - Quantum thermodynamics
-  - Quantum phase estimation
-  - Trotter-Suzuki decompositions
-
-## 🎯 Use Cases
-
-- Quantum computing education
-- Quantum algorithm development assistance
-- Quantum physics problem-solving
-- Research support for quantum mechanics
-- Quantum circuit design help
-
-## ⚠️ Important Notes
-
-1. **FP4 Quantization**: Used during training to fit 30B model in limited VRAM
-2. **No Dropout**: `lora_dropout=0` for cleaner fine-tuning
-3. **No Data Augmentation**: Using clean dataset as-is
-4. **GGUF Format**: Optimized for inference, not training
-5. **Streaming**: Live token generation for better UX
-
-## 🔍 Troubleshooting
+## Troubleshooting
 
 ### CUDA Out of Memory
-- Reduce `per_device_train_batch_size`
+- Reduce `per_device_train_batch_size` in training config
 - Increase `gradient_accumulation_steps`
-- Reduce `max_seq_length`
+- Use a smaller model (7B or 8B)
 
 ### Slow Inference
-- Increase `n_gpu_layers` in Streamlit app
-- Use smaller GGUF quantization (q4_k_m is recommended)
-- Reduce `max_tokens`
+- Ensure GPU layers are enabled in Streamlit app
+- Use Q4_K_M quantization (good balance of speed/quality)
+- Reduce context length
 
-### Model Not Found
-- Ensure training completed successfully
-- Check for `.gguf` files in project directory
-- Verify GGUF conversion didn't error
+### Evaluation Errors
+- Ensure Ollama is running: `ollama serve`
+- Check model is loaded: `ollama list`
+- Verify judge model is available: `ollama pull gpt-oss:120b`
 
-## 📚 References
+## References
 
-- [Unsloth Documentation](https://docs.unsloth.ai/)
-- [Nemotron-3 Model Card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16)
-- [QuantumLLMInstruct Dataset](https://huggingface.co/datasets/BoltzmannEntropy/QuantumLLMInstruct)
+- [Qwen2.5 Models](https://huggingface.co/Qwen)
+- [PEFT/LoRA](https://github.com/huggingface/peft)
 - [llama.cpp](https://github.com/ggerganov/llama.cpp)
+- [Ollama](https://ollama.ai/)
 
-## 📄 License
+## License
 
-This project uses:
-- NVIDIA Nemotron Open Model License (for the model)
-- Apache 2.0 (for the dataset)
-
-## 🤝 Contributing
-
-Feel free to open issues or submit pull requests for improvements!
-
----
-
-**Happy Quantum Computing! ⚛️**
+Model weights are subject to their respective licenses (Qwen, dataset licenses).
+Code is provided as-is for research and educational purposes.

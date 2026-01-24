@@ -1,0 +1,49 @@
+# Medical MCQ Dataset Configuration
+name: "Medical (MedMCQA)"
+dataset_name: "openlifescienceai/medmcqa"
+domain: "Medical/Biomedical"
+split: "train"
+
+# Field mappings for this dataset
+fields:
+  instruction: "question"
+  response: "answer"
+  context_fields:
+    - "subject_name"
+    - "topic_name"
+  # MCQ-specific fields
+  options:
+    - "opa"
+    - "opb"
+    - "opc"
+    - "opd"
+  correct_option: "cop"  # 0-indexed: 0=a, 1=b, 2=c, 3=d
+
+# Prompt template (MCQ format)
+prompt_template: |
+  Below is a medical multiple choice question with options. Select the correct answer and explain your reasoning.
+
+  ### Question:
+  {}
+
+  ### Options:
+  A) {}
+  B) {}
+  C) {}
+  D) {}
+
+  ### Subject:
+  {}
+
+  ### Answer:
+  {}
+
+# Context format
+context_format: "{subject_name} - {topic_name}"
+
+# Train/val/test split ratios
+train_val_test_split:
+  train: 0.6
+  val: 0.2
+  test: 0.2
+  seed: 3407

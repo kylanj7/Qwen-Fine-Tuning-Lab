@@ -2,13 +2,13 @@ import streamlit as st
 from llama_cpp import Llama
 import time
 from typing import Iterator, Dict, Any
+from pathlib import Path
 import os
-import glob
 
 # Page configuration
 st.set_page_config(
-    page_title="Nemotron-3 Quantum Physics Chatbot",
-    page_icon="⚛️",
+    page_title="Fine-Tune LLM Test Lab",
+    page_icon="⚗️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -36,13 +36,15 @@ st.markdown("""
         border-left: 4px solid #00ff88;
     }
     .metric-container {
-        background-color: #1a1a1a;
+        background-color: #000000;
         color: #00ff88;
-        padding: 1rem;
+        padding: 0.75rem 1rem;
         border-radius: 0.5rem;
-        border: 1px solid #333333;
+        border: 1px solid #00ff88;
         margin-top: 0.5rem;
+        margin-bottom: 0;
         font-family: 'Courier New', monospace;
+        font-size: 0.9rem;
     }
     .stMarkdown {
         color: #ffffff;
@@ -95,10 +97,15 @@ def load_model(model_path: str, **kwargs) -> Llama:
         st.code("CMAKE_ARGS=\"-DLLAMA_CUBLAS=on\" pip install llama-cpp-python --upgrade --force-reinstall --no-cache-dir")
         return None
 
+GGUF_MODELS_DIR = "models/gguf"
+
 def find_gguf_models() -> list:
-    """Find all GGUF models in the current directory"""
-    gguf_files = glob.glob("*.gguf")
-    return sorted(gguf_files)
+    """Find all GGUF models in the models/gguf directory"""
+    gguf_dir = Path(GGUF_MODELS_DIR)
+    if not gguf_dir.exists():
+        return []
+    gguf_files = list(gguf_dir.glob("*.gguf"))
+    return sorted([str(f) for f in gguf_files])
 
 def format_prompt(message: str, chat_history: list, system_prompt: str = "") -> str:
     """Format the prompt for the model"""
@@ -127,12 +134,6 @@ def stream_response(
     temperature: float,
     top_p: float,
     top_k: int,
-    repeat_penalty: float,
-    presence_penalty: float,
-    frequency_penalty: float,
-    mirostat_mode: int,
-    mirostat_tau: float,
-    mirostat_eta: float,
 ) -> Iterator[Dict[str, Any]]:
     """Stream the model response with metrics"""
     
@@ -145,12 +146,6 @@ def stream_response(
         temperature=temperature,
         top_p=top_p,
         top_k=top_k,
-        repeat_penalty=repeat_penalty,
-        presence_penalty=presence_penalty,
-        frequency_penalty=frequency_penalty,
-        mirostat_mode=mirostat_mode,
-        mirostat_tau=mirostat_tau,
-        mirostat_eta=mirostat_eta,
         stream=True,
         stop=["<|im_end|>", "<|endoftext|>"],
     )
@@ -171,8 +166,8 @@ def stream_response(
                 }
 
 def main():
-    st.title("⚛️ Nemotron-3 Quantum Physics Chatbot")
-    st.markdown("Fine-tuned on quantum physics dataset for specialized quantum computing assistance")
+    st.title("⚗️ Fine-Tune LLM Test Lab")
+    st.markdown("Test and evaluate fine-tuned language models")
     
     # Sidebar - Model Selection and Configuration
     with st.sidebar:
@@ -182,8 +177,8 @@ def main():
         gguf_models = find_gguf_models()
         
         if not gguf_models:
-            st.error("No GGUF models found in the current directory!")
-            st.info("Please run train.py first to generate a GGUF model.")
+            st.error(f"No GGUF models found in {GGUF_MODELS_DIR}/")
+            st.info("Please run train.py and merge_and_convert_gguff.py to generate a GGUF model.")
             st.stop()
         
         # Model selection
@@ -200,8 +195,8 @@ def main():
         st.subheader("💬 System Prompt")
         system_prompt = st.text_area(
             "System Prompt",
-            value="You are a helpful AI assistant specialized in quantum physics and quantum computing. Provide accurate, detailed explanations of quantum concepts.",
-            height=100,
+            value=" ",
+            height=200,
             help="Set the behavior and context for the model"
         )
         
@@ -215,14 +210,8 @@ def main():
         use_gpu = st.checkbox("Enable GPU Acceleration", value=True, help="Offload layers to GPU")
         
         if use_gpu:
-            n_gpu_layers = st.slider(
-                "GPU Layers",
-                min_value=-1,
-                max_value=100,
-                value=-1,
-                help="-1 offloads ALL layers to GPU (recommended)"
-            )
-            st.info("💡 Set to -1 to use full GPU acceleration")
+            n_gpu_layers = -1
+            st.success("✅ GPU enabled - all layers offloaded to GPU")
         else:
             n_gpu_layers = 0
             st.warning("⚠️ GPU disabled - model will run on CPU only")
@@ -247,13 +236,13 @@ def main():
         st.divider()
         
         # Generation Parameters
-        st.subheader("⚙️ Generation Parameters")
+        st.subheader("📈 Generation Parameters")
         
         max_tokens = st.slider(
             "Max Tokens",
-            min_value=1,
-            max_value=4096,
-            value=512,
+            min_value=4096,
+            max_value=16384,
+            value=4096,
             step=1,
             help="Maximum number of tokens to generate"
         )
@@ -284,63 +273,6 @@ def main():
             step=1,
             help="Number of top tokens to consider. 0 = disabled"
         )
-        
-        st.divider()
-        
-        # Advanced Parameters
-        with st.expander("🔬 Advanced Parameters"):
-            repeat_penalty = st.slider(
-                "Repeat Penalty",
-                min_value=1.0,
-                max_value=2.0,
-                value=1.1,
-                step=0.01,
-                help="Penalty for repeating tokens"
-            )
-            
-            presence_penalty = st.slider(
-                "Presence Penalty",
-                min_value=0.0,
-                max_value=2.0,
-                value=0.0,
-                step=0.01,
-                help="Penalty for tokens already present"
-            )
-            
-            frequency_penalty = st.slider(
-                "Frequency Penalty",
-                min_value=0.0,
-                max_value=2.0,
-                value=0.0,
-                step=0.01,
-                help="Penalty based on token frequency"
-            )
-            
-            st.markdown("**Mirostat Sampling**")
-            mirostat_mode = st.selectbox(
-                "Mirostat Mode",
-                [0, 1, 2],
-                index=0,
-                help="0 = disabled, 1 = Mirostat 1.0, 2 = Mirostat 2.0"
-            )
-            
-            mirostat_tau = st.slider(
-                "Mirostat Tau",
-                min_value=0.0,
-                max_value=10.0,
-                value=5.0,
-                step=0.1,
-                help="Target entropy for Mirostat"
-            )
-            
-            mirostat_eta = st.slider(
-                "Mirostat Eta",
-                min_value=0.0,
-                max_value=1.0,
-                value=0.1,
-                step=0.01,
-                help="Learning rate for Mirostat"
-            )
         
         st.divider()
         
@@ -395,7 +327,7 @@ def main():
             st.markdown('</div>', unsafe_allow_html=True)
     
     # Chat input
-    if prompt := st.chat_input("Ask about quantum physics..."):
+    if prompt := st.chat_input("Test your new LLM..."):
         # Add user message to chat history
         st.session_state.messages.append({"role": "user", "content": prompt})
         
@@ -421,6 +353,7 @@ def main():
             full_response = ""
             
             # Stream the response
+            last_update = time.time()
             for chunk in stream_response(
                 llm,
                 formatted_prompt,
@@ -428,28 +361,35 @@ def main():
                 temperature,
                 top_p,
                 top_k,
-                repeat_penalty,
-                presence_penalty,
-                frequency_penalty,
-                mirostat_mode,
-                mirostat_tau,
-                mirostat_eta,
             ):
                 full_response += chunk['text']
                 response_placeholder.markdown(full_response + "▌")
                 
-                # Update metrics with better formatting
-                metrics_placeholder.markdown(
-                    f'<div class="metric-container">'
-                    f'⚡ <strong>{chunk["tokens_per_sec"]:.2f}</strong> tokens/sec &nbsp;|&nbsp; '
-                    f'🔢 <strong>{chunk["tokens_generated"]}</strong> tokens &nbsp;|&nbsp; '
-                    f'⏱️ <strong>{chunk["elapsed_time"]:.2f}</strong>s'
-                    f'</div>',
-                    unsafe_allow_html=True
-                )
+                # Update metrics every 0.1 seconds to reduce flickering
+                current_time = time.time()
+                if current_time - last_update > 0.1:
+                    metrics_placeholder.markdown(
+                        f'<div class="metric-container">'
+                        f'⚡ <strong>{chunk["tokens_per_sec"]:.1f}</strong> tok/s &nbsp;│&nbsp; '
+                        f'🔢 <strong>{chunk["tokens_generated"]}</strong> tokens &nbsp;│&nbsp; '
+                        f'⏱️ <strong>{chunk["elapsed_time"]:.1f}</strong>s'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
+                    last_update = current_time
             
             # Final display without cursor
             response_placeholder.markdown(full_response)
+            
+            # Final metrics
+            metrics_placeholder.markdown(
+                f'<div class="metric-container">'
+                f'✅ Complete: <strong>{chunk["tokens_per_sec"]:.1f}</strong> tok/s &nbsp;│&nbsp; '
+                f'<strong>{chunk["tokens_generated"]}</strong> tokens &nbsp;│&nbsp; '
+                f'<strong>{chunk["elapsed_time"]:.1f}</strong>s total'
+                f'</div>',
+                unsafe_allow_html=True
+            )
             st.markdown('</div>', unsafe_allow_html=True)
             
             # Add assistant response to chat history

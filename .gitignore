@@ -1,0 +1,42 @@
+# Model files (large binaries)
+models/gguf/*.gguf
+*.gguf
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.so
+
+# Virtual environments
+venv/
+.venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Training outputs
+outputs/
+wandb/
+evaluation_results/
+.training_index.json
+
+# Merged models (large directories)
+*_merged/
+*_model/
+
+# llama.cpp build
+llama.cpp/
+
+# Environment files
+.env
+.env.local
+
+# OS files
+.DS_Store
+Thumbs.db

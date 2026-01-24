@@ -1,0 +1,36 @@
+# Quantum Physics Dataset Configuration
+name: "Quantum Physics"
+dataset_name: "BoltzmannEntropy/QuantumLLMInstruct"
+domain: "Quantum Physics"
+split: "train"
+
+# Field mappings for this dataset
+fields:
+  instruction: "problem"
+  response: "solution"
+  context_fields:
+    - "main_domain"
+    - "sub_domain"
+
+# Prompt template
+prompt_template: |
+  Below is an instruction that describes a quantum physics task, paired with an input that provides further context. Write a response that appropriately completes the request.
+
+  ### Instruction:
+  {}
+
+  ### Input:
+  {}
+
+  ### Response:
+  {}
+
+# Context format (how to combine context fields)
+context_format: "Domain: {main_domain} - {sub_domain}"
+
+# Train/val/test split ratios (optional - set to null to use full dataset)
+train_val_test_split:
+  train: 0.6
+  val: 0.2
+  test: 0.2
+  seed: 3407

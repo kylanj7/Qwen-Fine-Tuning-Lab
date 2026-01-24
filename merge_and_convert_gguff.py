@@ -1,9 +1,15 @@
 import torch
 import os
 import sys
+import json
+import shutil
 import argparse
+from pathlib import Path
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
+
+# Output directory for GGUF models
+GGUF_OUTPUT_DIR = Path(__file__).parent / "models" / "gguf"
 
 def merge_lora_adapter(base_model_name, adapter_path, output_path):
     """
@@ -199,32 +205,60 @@ def convert_to_gguf(model_path, quantization_method="q4_k_m"):
     return final_output
 
 
+def load_run_metadata(adapter_path: str) -> dict:
+    """
+    Load run metadata from the training output directory.
+
+    Args:
+        adapter_path: Path to the LoRA adapter (e.g., outputs/run-name/final_adapter)
+
+    Returns:
+        Run metadata dict or empty dict if not found
+    """
+    # Check in adapter path parent (the run directory)
+    adapter_dir = Path(adapter_path)
+
+    # Try parent directory (outputs/run-name/)
+    metadata_path = adapter_dir.parent / "run_metadata.json"
+    if metadata_path.exists():
+        with open(metadata_path, 'r') as f:
+            return json.load(f)
+
+    # Try adapter directory itself
+    metadata_path = adapter_dir / "run_metadata.json"
+    if metadata_path.exists():
+        with open(metadata_path, 'r') as f:
+            return json.load(f)
+
+    return {}
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Merge LoRA adapter with base model and convert to GGUF format"
     )
-    
+
     parser.add_argument(
         "--base-model",
         type=str,
-        default="Qwen/Qwen2.5-14B-Instruct",
-        help="Base model name from HuggingFace (default: Qwen/Qwen2.5-14B-Instruct)"
+        default=None,
+        help="Base model name from HuggingFace (auto-detected from run metadata if not specified)"
     )
-    
+
     parser.add_argument(
         "--adapter-path",
         type=str,
-        default="qwen_quantum_model",
-        help="Path to the LoRA adapter (default: qwen_quantum_model)"
+        required=True,
+        help="Path to the LoRA adapter (e.g., outputs/qwen25-14b-chemistry-20260124-001/final_adapter)"
     )
-    
+
     parser.add_argument(
-        "--output-path",
+        "--output-name",
         type=str,
-        default="qwen_quantum_merged",
-        help="Path to save merged model (default: qwen_quantum_merged)"
+        default=None,
+        help="Output name for GGUF file (auto-generated from run metadata if not specified)"
     )
-    
+
     parser.add_argument(
         "--quantization",
         type=str,
@@ -237,54 +271,105 @@ def main():
         ],
         help="GGUF quantization method (default: q4_k_m)"
     )
-    
+
     parser.add_argument(
         "--skip-merge",
         action="store_true",
         help="Skip merging step (use if model is already merged)"
     )
-    
+
+    parser.add_argument(
+        "--keep-merged",
+        action="store_true",
+        help="Keep the merged model directory (default: delete after GGUF conversion)"
+    )
+
     args = parser.parse_args()
-    
+
+    # Load run metadata
+    run_metadata = load_run_metadata(args.adapter_path)
+
+    # Determine base model
+    if args.base_model:
+        base_model = args.base_model
+    elif run_metadata.get('base_model'):
+        base_model = run_metadata['base_model']
+    else:
+        base_model = "Qwen/Qwen2.5-14B-Instruct"
+        print(f"WARNING: No base model specified, using default: {base_model}")
+
+    # Determine output name
+    if args.output_name:
+        output_name = args.output_name
+    elif run_metadata.get('run_name'):
+        output_name = run_metadata['run_name']
+    else:
+        # Fallback: use adapter directory name
+        output_name = Path(args.adapter_path).parent.name
+
+    # Create temporary merged model path
+    merged_path = f"_temp_merged_{output_name}"
+
     print("=" * 80)
     print("LORA MERGE + GGUF CONVERSION PIPELINE")
     print("=" * 80)
     print(f"\nConfiguration:")
-    print(f"  Base Model: {args.base_model}")
+    print(f"  Base Model: {base_model}")
     print(f"  Adapter Path: {args.adapter_path}")
-    print(f"  Output Path: {args.output_path}")
+    print(f"  Output Name: {output_name}")
     print(f"  Quantization: {args.quantization}")
     print(f"  Skip Merge: {args.skip_merge}")
+    if run_metadata:
+        print(f"\nRun Metadata:")
+        print(f"  Run Index: #{run_metadata.get('run_index', 'N/A'):03d}" if isinstance(run_metadata.get('run_index'), int) else f"  Run Index: {run_metadata.get('run_index', 'N/A')}")
+        print(f"  Model Size: {run_metadata.get('model_size', 'N/A')}")
+        print(f"  Dataset: {run_metadata.get('dataset', 'N/A')}")
     print()
-    
+
+    # Ensure output directory exists
+    GGUF_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
     try:
         # Step 1: Merge LoRA adapter with base model
         if not args.skip_merge:
             if not os.path.exists(args.adapter_path):
                 raise FileNotFoundError(f"Adapter path not found: {args.adapter_path}")
-            
+
             merged_path = merge_lora_adapter(
-                args.base_model,
+                base_model,
                 args.adapter_path,
-                args.output_path
+                merged_path
             )
         else:
             print("Skipping merge step...")
-            merged_path = args.output_path
             if not os.path.exists(merged_path):
                 raise FileNotFoundError(f"Merged model not found: {merged_path}")
-        
+
         # Step 2: Convert to GGUF
-        gguf_path = convert_to_gguf(merged_path, args.quantization)
-        
+        temp_gguf_path = convert_to_gguf(merged_path, args.quantization)
+
+        # Step 3: Move GGUF to models/gguf/ with proper name
+        final_gguf_name = f"{output_name}-{args.quantization}.gguf"
+        final_gguf_path = GGUF_OUTPUT_DIR / final_gguf_name
+
+        print(f"\nMoving GGUF to: {final_gguf_path}")
+        shutil.move(temp_gguf_path, final_gguf_path)
+
+        # Step 4: Clean up merged model directory (unless --keep-merged)
+        if not args.keep_merged and os.path.exists(merged_path):
+            print(f"\nCleaning up merged model directory: {merged_path}")
+            shutil.rmtree(merged_path)
+
         print("\n" + "=" * 80)
         print("PIPELINE COMPLETED SUCCESSFULLY!")
         print("=" * 80)
-        print(f"\nMerged Model: {merged_path}")
-        print(f"GGUF Model: {gguf_path}")
-        print(f"\nYou can now use the GGUF model with llama.cpp or other compatible tools.")
+        print(f"\nGGUF Model: {final_gguf_path}")
+        print(f"Size: {final_gguf_path.stat().st_size / 1024**3:.2f} GB")
+        print(f"\nYou can now use this model with:")
+        print(f"  streamlit run app.py")
+        print(f"  ollama create {output_name} -f Modelfile")
         print("=" * 80)
-        
+
     except Exception as e:
         print("\n" + "=" * 80)
         print("ERROR OCCURRED")

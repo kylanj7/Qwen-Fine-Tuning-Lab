@@ -1,0 +1,40 @@
+# SciQ Dataset Configuration
+name: "General Science (SciQ)"
+dataset_name: "allenai/sciq"
+domain: "General Science"
+split: "train"
+
+# Field mappings for this dataset
+fields:
+  instruction: "question"
+  response: "correct_answer"
+  context_fields:
+    - "support"
+  # MCQ distractors (wrong answers)
+  distractors:
+    - "distractor1"
+    - "distractor2"
+    - "distractor3"
+
+# Prompt template
+prompt_template: |
+  Below is a science question with supporting context. Write a response that appropriately answers the question.
+
+  ### Question:
+  {}
+
+  ### Context:
+  {}
+
+  ### Answer:
+  {}
+
+# Context format
+context_format: "{support}"
+
+# Train/val/test split ratios
+train_val_test_split:
+  train: 0.6
+  val: 0.2
+  test: 0.2
+  seed: 3407

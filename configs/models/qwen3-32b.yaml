@@ -1,0 +1,35 @@
+# Qwen3 32B Model Configuration
+name: "Qwen3 32B"
+model_name: "Qwen/Qwen3-32B"
+size: "32B"
+
+# Quantization settings
+quantization:
+  load_in_4bit: true
+  bnb_4bit_quant_type: "nf4"
+  bnb_4bit_compute_dtype: "bfloat16"
+  bnb_4bit_use_double_quant: true
+
+# LoRA configuration
+lora:
+  r: 16
+  lora_alpha: 16
+  lora_dropout: 0
+  bias: "none"
+  task_type: "CAUSAL_LM"
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+
+# Tokenizer settings
+tokenizer:
+  trust_remote_code: true
+  padding_side: "right"
+
+# Max sequence length
+max_seq_length: 2048
