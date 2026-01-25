@@ -1,0 +1,31 @@
+# Core Fine-tuning Stack
+transformers>=4.48.0
+peft>=0.14.0
+trl>=0.12.0
+accelerate>=1.2.0
+bitsandbytes>=0.45.0
+
+# Qwen & Model Support
+sentencepiece
+safetensors
+tokenizers
+huggingface_hub
+
+# Data & Math (High-level)
+datasets
+scipy
+pandas
+pyarrow
+
+# Utilities
+tqdm
+pyyaml
+wandb
+click
+pillow
+pydantic>=2.10.0
+
+# Optional: Efficient Inference (if needed for evaluation)
+# llama-cpp-python is kept but ensure it matches the container's CUDA
+llama-cpp-python==0.3.16 
+

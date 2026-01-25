@@ -15,8 +15,9 @@ A unified, configuration-driven pipeline for fine-tuning Qwen models on scientif
 .
 ├── train.py                    # Unified training pipeline
 ├── app.py                      # Streamlit test interface
-├── evaluate_model.py           # Model evaluation with LLM-as-judge
-├── merge_and_convert_gguff.py  # LoRA merge + GGUF conversion
+├── evaluate_model.py           # Model evaluation with RAG-grounded fact-checking
+├── merge_and_convert_gguff.py  # LoRA merge + GGUF conversion (interactive)
+├── convert_base_to_gguf.py     # Convert base model to GGUF (no LoRA)
 ├── configs/
 │   ├── models/                 # Model configurations
 │   │   ├── qwen2.5-14b-instruct.yaml
@@ -31,8 +32,13 @@ A unified, configuration-driven pipeline for fine-tuning Qwen models on scientif
 │       └── quick_test.yaml
 ├── models/
 │   └── gguf/                   # GGUF models for inference
-│       ├── qwen_chemistry_merged-q4_k_m.gguf
-│       └── qwen_quantum_merged-q4_k_m.gguf
+│       ├── qwen2.5-14b-instruct-base-q4_k_m.gguf  # Base model
+│       ├── qwen_chemistry_merged-q4_k_m.gguf      # Fine-tuned
+│       └── qwen_quantum_merged-q4_k_m.gguf        # Fine-tuned
+├── evaluation_results/         # Evaluation outputs
+│   ├── eval_*.json             # Detailed results
+│   ├── eval_*.txt              # Text logs
+│   └── articles_*.json         # RAG sources for verification
 └── outputs/                    # Training outputs and checkpoints
 ```
 
@@ -58,18 +64,32 @@ python train.py --model qwen2.5-14b-instruct --dataset chemistry --training defa
 
 ### 3. Convert to GGUF
 
-After training, merge LoRA weights and convert to GGUF:
+#### Fine-tuned Model (with LoRA merge)
+
+Interactive mode (recommended):
 ```bash
-# Uses run metadata to auto-detect base model and generate proper filename
-python merge_and_convert_gguff.py --adapter-path outputs/qwen25-14b-instruct-chemistry-20260124-001/final_adapter
+python merge_and_convert_gguff.py
 ```
 
-Output will be saved to `models/gguf/` with naming convention:
-```
-{model}-{size}-{dataset}-{timestamp}-{index}-{quantization}.gguf
+This will:
+1. List all available LoRA adapters from `outputs/`
+2. Let you select quantization method
+3. Auto-detect base model from run metadata
+4. Merge and convert to GGUF
+
+CLI mode:
+```bash
+python merge_and_convert_gguff.py --adapter-path outputs/checkpoint-100 --quantization q4_k_m
 ```
 
-Example: `qwen25-14b-instruct-chemistry-20260124-001-q4_k_m.gguf`
+#### Base Model (no LoRA)
+
+Convert the base Qwen model to GGUF for comparison testing:
+```bash
+python convert_base_to_gguf.py
+```
+
+Output: `models/gguf/qwen2.5-14b-instruct-base-q4_k_m.gguf`
 
 ### 4. Test with Streamlit
 
@@ -79,16 +99,68 @@ streamlit run app.py
 
 ### 5. Evaluate Model Accuracy
 
+Interactive mode:
 ```bash
-# List available datasets
-python evaluate_model.py --list-datasets
-
-# Evaluate a model
-python evaluate_model.py --model qwen_chemistry:latest --dataset chemistry
-
-# Evaluate with more samples, no web search
-python evaluate_model.py --model my_model:latest --dataset quantum --max_samples 200 --no-web-search
+python evaluate_model.py
 ```
+
+This will guide you through:
+1. Selecting a GGUF model from `models/gguf/`
+2. Choosing a test dataset
+3. Setting the number of samples
+
+## Model Evaluation
+
+The evaluation system uses **RAG-grounded LLM-as-judge** scoring:
+
+### How It Works
+
+1. **Load Test Data**: Uses the test split from the dataset config
+2. **Get Model Response**: Runs inference on your GGUF model via llama-cpp
+3. **RAG Retrieval**: Fetches relevant academic papers from Semantic Scholar
+4. **Multi-dimensional Scoring**: A judge model (gpt-oss:120b) scores on three dimensions:
+   - **Factual Accuracy** (50%): Do claims match academic sources?
+   - **Completeness** (30%): Does the response fully address the query?
+   - **Technical Precision** (20%): Are equations and terminology correct?
+
+### Output Files
+
+Each evaluation run generates three files in `evaluation_results/`:
+
+| File | Description |
+|------|-------------|
+| `eval_*.txt` | Full text log with Q&A and scores |
+| `eval_*.json` | Structured results for analysis |
+| `articles_*.json` | All Semantic Scholar papers used (for manual verification) |
+
+### Article Logging
+
+The `articles_*.json` file contains all papers used for fact-checking:
+
+```json
+{
+  "article_logs": [
+    {
+      "question_index": 1,
+      "question": "Explain quantum entanglement...",
+      "search_keywords": "quantum entanglement",
+      "papers_retrieved": [
+        {
+          "paper_id": "abc123",
+          "title": "Quantum Entanglement in Many-Body Systems",
+          "year": 2023,
+          "authors": ["Alice", "Bob"],
+          "citation_count": 150,
+          "abstract": "...",
+          "semantic_scholar_url": "https://www.semanticscholar.org/paper/abc123"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Use this to manually verify the sources the judge used for scoring.
 
 ## Configuration System
 
@@ -169,109 +241,17 @@ Each training run generates a unique name:
 
 Example: `qwen25-14b-instruct-chemistry-20260124-001`
 
-Components:
-- **model**: Model name (e.g., `qwen25-14b-instruct`)
-- **size**: Parameter count (e.g., `14b`)
-- **dataset**: Dataset name (e.g., `chemistry`)
-- **timestamp**: Date in YYYYMMDD format
-- **index**: Auto-incrementing run number (001, 002, ...)
-
 ### Training Log
 
-All training runs are logged to `training_log.md` with full configuration details:
+All training runs are logged to `training_log.md` with full configuration details.
 
-```markdown
-## Run #001: qwen25-14b-instruct-chemistry-20260124-001
+## Available Models
 
-**Date:** 2026-01-24 10:30:00
-
-### Model Configuration
-| Parameter | Value |
-|-----------|-------|
-| Name | Qwen 2.5 14B Instruct |
-| HuggingFace ID | Qwen/Qwen2.5-14B-Instruct |
-| LoRA Rank (r) | 16 |
-...
-
-### Training Configuration
-| Parameter | Value |
-|-----------|-------|
-| Batch Size | 4 |
-| Learning Rate | 5e-5 |
-...
-```
-
-This makes it easy to:
-- Track all experiments in one place
-- Compare configurations between runs
-- Reproduce previous training runs
-- Document model provenance
-
-## Model Evaluation
-
-The evaluation system (`evaluate_model.py`) uses an **LLM-as-judge** approach:
-
-### How It Works
-
-1. **Load Test Data**: Uses the 20% test split from the dataset config
-2. **Get Model Response**: Queries your fine-tuned model via Ollama
-3. **Gather References**: Combines ground truth + optional web search results
-4. **Judge Scoring**: A larger model (default: gpt-oss:120b) scores the answer:
-   - **CORRECT (1.0)**: Accurate and complete
-   - **PARTIAL (0.5)**: Core concept right, minor issues
-   - **INCORRECT (0.0)**: Wrong facts or off-topic
-
-### Output
-
-```
-============================================================
-CHEMISTRY MODEL EVALUATION RESULTS
-============================================================
-Evaluation Date: 2026-01-24 10:30:00
-Test Model: qwen_chemistry:latest
-Judge Model: gpt-oss:120b
-Dataset: camel-ai/chemistry
-Total Samples: 100
-
-------------------------------------------------------------
-OVERALL SCORES
-------------------------------------------------------------
-Fully Correct:       72 (72.0%)
-Partially Correct:   18 (18.0%)
-Incorrect:           10 (10.0%)
-
-RAW ACCURACY SCORE: 81.0%
-
-------------------------------------------------------------
-SCORES BY TOPIC
-------------------------------------------------------------
-Organic Chemistry                    87.5% (n=24)
-Physical Chemistry                   82.0% (n=20)
-...
-```
-
-Results are saved to `evaluation_results/` as JSON (detailed) and TXT (report).
-
-## Streamlit Test Interface
-
-The app provides:
-
-- **Model Selection**: Auto-detects GGUF models in `models/gguf/`
-- **GPU Acceleration**: Full GPU offloading with llama-cpp-python
-- **Generation Controls**: Temperature, top-p, top-k, max tokens
-- **Live Metrics**: Tokens/second, total tokens, elapsed time
-- **Custom System Prompts**: Adjust model behavior
-
-## Hardware Requirements
-
-### Training
-- **GPU**: 24GB+ VRAM (RTX 3090/4090, A5000, A100)
-- **RAM**: 32GB system RAM
-- **Storage**: 50GB free space
-
-### Inference (GGUF)
-- **RAM/VRAM**: 16GB minimum
-- **Storage**: 20GB per model
+| Model | Size | Type |
+|-------|------|------|
+| `qwen2.5-14b-instruct-base-q4_k_m.gguf` | 8.4 GB | Base (untuned) |
+| `qwen_chemistry_merged-q4_k_m.gguf` | 8.4 GB | Fine-tuned on Chemistry |
+| `qwen_quantum_merged-q4_k_m.gguf` | 8.4 GB | Fine-tuned on Quantum Physics |
 
 ## Available Datasets
 
@@ -285,6 +265,17 @@ The app provides:
 | `materials-science` | pranked03/materials_science_dataset | Materials Science |
 | `medmcqa` | openlifescienceai/medmcqa | Medical (MCQ) |
 | `sciq` | allenai/sciq | Science (MCQ) |
+
+## Hardware Requirements
+
+### Training
+- **GPU**: 24GB+ VRAM (RTX 3090/4090, A5000, A100)
+- **RAM**: 32GB system RAM
+- **Storage**: 50GB free space
+
+### Inference (GGUF)
+- **RAM/VRAM**: 16GB minimum
+- **Storage**: 10GB per model
 
 ## Troubleshooting
 
@@ -303,12 +294,17 @@ The app provides:
 - Check model is loaded: `ollama list`
 - Verify judge model is available: `ollama pull gpt-oss:120b`
 
+### Semantic Scholar Rate Limiting
+- Set `SEMANTIC_SCHOLAR_API_KEY` environment variable for faster API access
+- The script handles rate limiting automatically with retries
+
 ## References
 
 - [Qwen2.5 Models](https://huggingface.co/Qwen)
 - [PEFT/LoRA](https://github.com/huggingface/peft)
 - [llama.cpp](https://github.com/ggerganov/llama.cpp)
 - [Ollama](https://ollama.ai/)
+- [Semantic Scholar API](https://api.semanticscholar.org/)
 
 ## License
 

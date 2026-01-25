@@ -1,0 +1,27 @@
+# 1. Large Model Weights (Keep these on your host, mount them later)
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+checkpoint-*/
+
+# 2. Python/Conda Artifacts (The container will install its own)
+__pycache__/
+*.pyc
+.env
+.venv/
+.conda/
+.ipynb_checkpoints/
+
+# 3. Training Logs & Data (Mount these as volumes instead)
+outputs/
+logs/
+wandb/
+*.csv
+*.jsonl
+datasets/
+
+# 4. Hidden system files
+.git/
+.DS_Store

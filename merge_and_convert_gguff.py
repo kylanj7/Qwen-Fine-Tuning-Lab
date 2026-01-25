@@ -1,3 +1,16 @@
+#!/usr/bin/env python3
+"""
+LoRA Merge + GGUF Conversion Pipeline
+======================================
+Merge LoRA adapters with base models and convert to GGUF format.
+
+Run interactively (recommended):
+    python merge_and_convert_gguff.py
+
+Or with arguments:
+    python merge_and_convert_gguff.py --adapter-path outputs/checkpoint-100
+"""
+
 import torch
 import os
 import sys
@@ -5,11 +18,24 @@ import json
 import shutil
 import argparse
 from pathlib import Path
+from typing import List, Dict, Optional
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
 
-# Output directory for GGUF models
-GGUF_OUTPUT_DIR = Path(__file__).parent / "models" / "gguf"
+# Directories
+SCRIPT_DIR = Path(__file__).parent
+OUTPUTS_DIR = SCRIPT_DIR / "outputs"
+GGUF_OUTPUT_DIR = SCRIPT_DIR / "models" / "gguf"
+
+# Quantization options
+QUANT_OPTIONS = {
+    "q4_k_m": "Best balance of quality/size (recommended)",
+    "q5_k_m": "Higher quality, ~20% larger",
+    "q6_k": "Near-lossless, ~40% larger",
+    "q8_0": "Highest quality, largest size",
+    "q4_k_s": "Smaller than q4_k_m, slightly lower quality",
+    "q3_k_m": "Smallest usable size, lower quality",
+}
 
 def merge_lora_adapter(base_model_name, adapter_path, output_path):
     """
@@ -205,6 +231,188 @@ def convert_to_gguf(model_path, quantization_method="q4_k_m"):
     return final_output
 
 
+# =============================================================================
+# Interactive Selection Functions
+# =============================================================================
+
+def print_header():
+    print()
+    print("=" * 70)
+    print("LORA MERGE + GGUF CONVERSION")
+    print("=" * 70)
+    print()
+
+
+def find_adapters() -> List[Dict]:
+    """Find all LoRA adapters in the outputs directory."""
+    adapters = []
+
+    if not OUTPUTS_DIR.exists():
+        return adapters
+
+    # Search for adapter_config.json files
+    for adapter_config in OUTPUTS_DIR.rglob("adapter_config.json"):
+        adapter_dir = adapter_config.parent
+
+        # Load adapter config for info
+        try:
+            with open(adapter_config, 'r') as f:
+                config = json.load(f)
+        except:
+            config = {}
+
+        # Check for run metadata
+        run_metadata = {}
+        for meta_path in [adapter_dir / "run_metadata.json", adapter_dir.parent / "run_metadata.json"]:
+            if meta_path.exists():
+                try:
+                    with open(meta_path, 'r') as f:
+                        run_metadata = json.load(f)
+                    break
+                except:
+                    pass
+
+        # Calculate adapter size
+        adapter_size = sum(
+            f.stat().st_size for f in adapter_dir.glob("*.safetensors")
+        ) / (1024 * 1024)  # MB
+
+        adapters.append({
+            "path": str(adapter_dir),
+            "name": adapter_dir.name,
+            "base_model": config.get("base_model_name_or_path", run_metadata.get("base_model", "Unknown")),
+            "r": config.get("r", "?"),
+            "lora_alpha": config.get("lora_alpha", "?"),
+            "size_mb": adapter_size,
+            "run_metadata": run_metadata,
+        })
+
+    # Sort by modification time (newest first)
+    adapters.sort(key=lambda x: Path(x["path"]).stat().st_mtime, reverse=True)
+
+    return adapters
+
+
+def select_from_list(options: List[str], prompt: str) -> int:
+    """Interactive selection from a list."""
+    print(f"{prompt}")
+    print("-" * 50)
+
+    for i, opt in enumerate(options, 1):
+        print(f"  [{i}] {opt}")
+
+    print()
+    while True:
+        try:
+            choice = input(f"Select [1-{len(options)}]: ").strip()
+            idx = int(choice) - 1
+            if 0 <= idx < len(options):
+                return idx
+            print(f"Please enter 1-{len(options)}")
+        except ValueError:
+            print("Enter a number")
+        except KeyboardInterrupt:
+            print("\nCancelled.")
+            sys.exit(0)
+
+
+def get_text_input(prompt: str, default: str = "") -> str:
+    """Get text input with optional default."""
+    try:
+        default_str = f" [{default}]" if default else ""
+        value = input(f"{prompt}{default_str}: ").strip()
+        return value if value else default
+    except KeyboardInterrupt:
+        print("\nCancelled.")
+        sys.exit(0)
+
+
+def get_yes_no(prompt: str, default: bool = True) -> bool:
+    """Get yes/no input."""
+    default_str = "Y/n" if default else "y/N"
+    try:
+        value = input(f"{prompt} [{default_str}]: ").strip().lower()
+        if not value:
+            return default
+        return value in ('y', 'yes')
+    except KeyboardInterrupt:
+        print("\nCancelled.")
+        sys.exit(0)
+
+
+def interactive_mode() -> Dict:
+    """Run interactive selection mode."""
+    print_header()
+
+    # Find available adapters
+    adapters = find_adapters()
+
+    if not adapters:
+        print("ERROR: No LoRA adapters found in outputs/")
+        print("Train a model first with: python train.py")
+        sys.exit(1)
+
+    print(f"Found {len(adapters)} adapter(s)\n")
+
+    # Select adapter
+    adapter_displays = []
+    for a in adapters:
+        base_short = a["base_model"].split("/")[-1] if "/" in a["base_model"] else a["base_model"]
+        display = f"{a['name']} (r={a['r']}, {a['size_mb']:.1f}MB, base: {base_short})"
+        adapter_displays.append(display)
+
+    selected_idx = select_from_list(adapter_displays, "Select adapter to convert:")
+    selected_adapter = adapters[selected_idx]
+    print(f"  -> {selected_adapter['name']}\n")
+
+    # Select quantization
+    print()
+    quant_displays = [f"{k} - {v}" for k, v in QUANT_OPTIONS.items()]
+    quant_idx = select_from_list(quant_displays, "Select quantization method:")
+    selected_quant = list(QUANT_OPTIONS.keys())[quant_idx]
+    print(f"  -> {selected_quant}\n")
+
+    # Output name
+    print()
+    default_name = selected_adapter["run_metadata"].get("run_name", selected_adapter["name"])
+    output_name = get_text_input("Output name for GGUF file", default=default_name)
+    print()
+
+    # Base model (auto-detect or override)
+    base_model = selected_adapter["base_model"]
+    if base_model == "Unknown" or not base_model:
+        base_model = get_text_input("Base model (HuggingFace name)", default="Qwen/Qwen2.5-14B-Instruct")
+    else:
+        print(f"Base model: {base_model}")
+        if not get_yes_no("Use this base model?", default=True):
+            base_model = get_text_input("Base model (HuggingFace name)")
+
+    print()
+
+    # Confirmation
+    print("=" * 70)
+    print("CONFIGURATION")
+    print("=" * 70)
+    print(f"  Adapter:      {selected_adapter['path']}")
+    print(f"  Base Model:   {base_model}")
+    print(f"  Output Name:  {output_name}")
+    print(f"  Quantization: {selected_quant}")
+    print(f"  Output File:  models/gguf/{output_name}-{selected_quant}.gguf")
+    print("=" * 70)
+    print()
+
+    if not get_yes_no("Start conversion?", default=True):
+        print("Cancelled.")
+        sys.exit(0)
+
+    return {
+        "adapter_path": selected_adapter["path"],
+        "base_model": base_model,
+        "output_name": output_name,
+        "quantization": selected_quant,
+    }
+
+
 def load_run_metadata(adapter_path: str) -> dict:
     """
     Load run metadata from the training output directory.
@@ -235,7 +443,17 @@ def load_run_metadata(adapter_path: str) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Merge LoRA adapter with base model and convert to GGUF format"
+        description="Merge LoRA adapter with base model and convert to GGUF format",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  Interactive mode (recommended):
+    python merge_and_convert_gguff.py
+
+  With arguments:
+    python merge_and_convert_gguff.py --adapter-path outputs/checkpoint-100
+    python merge_and_convert_gguff.py --adapter-path outputs/checkpoint-100 --quantization q5_k_m
+"""
     )
 
     parser.add_argument(
@@ -248,15 +466,15 @@ def main():
     parser.add_argument(
         "--adapter-path",
         type=str,
-        required=True,
-        help="Path to the LoRA adapter (e.g., outputs/qwen25-14b-chemistry-20260124-001/final_adapter)"
+        default=None,
+        help="Path to the LoRA adapter (e.g., outputs/checkpoint-100)"
     )
 
     parser.add_argument(
         "--output-name",
         type=str,
         default=None,
-        help="Output name for GGUF file (auto-generated from run metadata if not specified)"
+        help="Output name for GGUF file (auto-generated from adapter name if not specified)"
     )
 
     parser.add_argument(
@@ -286,58 +504,77 @@ def main():
 
     args = parser.parse_args()
 
-    # Load run metadata
-    run_metadata = load_run_metadata(args.adapter_path)
-
-    # Determine base model
-    if args.base_model:
-        base_model = args.base_model
-    elif run_metadata.get('base_model'):
-        base_model = run_metadata['base_model']
+    # If no adapter path provided, run interactive mode
+    if args.adapter_path is None:
+        config = interactive_mode()
+        adapter_path = config["adapter_path"]
+        base_model = config["base_model"]
+        output_name = config["output_name"]
+        quantization = config["quantization"]
+        skip_merge = False
+        keep_merged = False
     else:
-        base_model = "Qwen/Qwen2.5-14B-Instruct"
-        print(f"WARNING: No base model specified, using default: {base_model}")
+        # CLI mode
+        adapter_path = args.adapter_path
+        quantization = args.quantization
+        skip_merge = args.skip_merge
+        keep_merged = args.keep_merged
 
-    # Determine output name
-    if args.output_name:
-        output_name = args.output_name
-    elif run_metadata.get('run_name'):
-        output_name = run_metadata['run_name']
-    else:
-        # Fallback: use adapter directory name
-        output_name = Path(args.adapter_path).parent.name
+        # Load run metadata
+        run_metadata = load_run_metadata(adapter_path)
+
+        # Determine base model
+        if args.base_model:
+            base_model = args.base_model
+        elif run_metadata.get('base_model'):
+            base_model = run_metadata['base_model']
+        else:
+            base_model = "Qwen/Qwen2.5-14B-Instruct"
+            print(f"WARNING: No base model specified, using default: {base_model}")
+
+        # Determine output name
+        if args.output_name:
+            output_name = args.output_name
+        elif run_metadata.get('run_name'):
+            output_name = run_metadata['run_name']
+        else:
+            # Fallback: use adapter directory name
+            output_name = Path(adapter_path).name
+
+        print("=" * 80)
+        print("LORA MERGE + GGUF CONVERSION PIPELINE")
+        print("=" * 80)
+        print(f"\nConfiguration:")
+        print(f"  Base Model: {base_model}")
+        print(f"  Adapter Path: {adapter_path}")
+        print(f"  Output Name: {output_name}")
+        print(f"  Quantization: {quantization}")
+        print(f"  Skip Merge: {skip_merge}")
+        if run_metadata:
+            print(f"\nRun Metadata:")
+            if isinstance(run_metadata.get('run_index'), int):
+                print(f"  Run Index: #{run_metadata.get('run_index', 'N/A'):03d}")
+            else:
+                print(f"  Run Index: {run_metadata.get('run_index', 'N/A')}")
+            print(f"  Model Size: {run_metadata.get('model_size', 'N/A')}")
+            print(f"  Dataset: {run_metadata.get('dataset', 'N/A')}")
+        print()
 
     # Create temporary merged model path
     merged_path = f"_temp_merged_{output_name}"
-
-    print("=" * 80)
-    print("LORA MERGE + GGUF CONVERSION PIPELINE")
-    print("=" * 80)
-    print(f"\nConfiguration:")
-    print(f"  Base Model: {base_model}")
-    print(f"  Adapter Path: {args.adapter_path}")
-    print(f"  Output Name: {output_name}")
-    print(f"  Quantization: {args.quantization}")
-    print(f"  Skip Merge: {args.skip_merge}")
-    if run_metadata:
-        print(f"\nRun Metadata:")
-        print(f"  Run Index: #{run_metadata.get('run_index', 'N/A'):03d}" if isinstance(run_metadata.get('run_index'), int) else f"  Run Index: {run_metadata.get('run_index', 'N/A')}")
-        print(f"  Model Size: {run_metadata.get('model_size', 'N/A')}")
-        print(f"  Dataset: {run_metadata.get('dataset', 'N/A')}")
-    print()
 
     # Ensure output directory exists
     GGUF_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     try:
         # Step 1: Merge LoRA adapter with base model
-        if not args.skip_merge:
-            if not os.path.exists(args.adapter_path):
-                raise FileNotFoundError(f"Adapter path not found: {args.adapter_path}")
+        if not skip_merge:
+            if not os.path.exists(adapter_path):
+                raise FileNotFoundError(f"Adapter path not found: {adapter_path}")
 
             merged_path = merge_lora_adapter(
                 base_model,
-                args.adapter_path,
+                adapter_path,
                 merged_path
             )
         else:
@@ -346,17 +583,17 @@ def main():
                 raise FileNotFoundError(f"Merged model not found: {merged_path}")
 
         # Step 2: Convert to GGUF
-        temp_gguf_path = convert_to_gguf(merged_path, args.quantization)
+        temp_gguf_path = convert_to_gguf(merged_path, quantization)
 
         # Step 3: Move GGUF to models/gguf/ with proper name
-        final_gguf_name = f"{output_name}-{args.quantization}.gguf"
+        final_gguf_name = f"{output_name}-{quantization}.gguf"
         final_gguf_path = GGUF_OUTPUT_DIR / final_gguf_name
 
         print(f"\nMoving GGUF to: {final_gguf_path}")
         shutil.move(temp_gguf_path, final_gguf_path)
 
         # Step 4: Clean up merged model directory (unless --keep-merged)
-        if not args.keep_merged and os.path.exists(merged_path):
+        if not keep_merged and os.path.exists(merged_path):
             print(f"\nCleaning up merged model directory: {merged_path}")
             shutil.rmtree(merged_path)
 
