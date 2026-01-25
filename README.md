@@ -1,6 +1,10 @@
-# Qwen Fine-Tuning System
+# Qwen Fine-Tuning Lab
 
 A unified, configuration-driven pipeline for fine-tuning Qwen models on scientific datasets with automated evaluation.
+
+![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
+![PyTorch](https://img.shields.io/badge/pytorch-2.0+-orange.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 ## Overview
 
@@ -276,6 +280,56 @@ All training runs are logged to `training_log.md` with full configuration detail
 ### Inference (GGUF)
 - **RAM/VRAM**: 16GB minimum
 - **Storage**: 10GB per model
+
+## Docker Setup (Recommended for Sharing)
+
+Docker ensures everyone has the exact same environment regardless of their system.
+
+### Quick Start with Docker
+
+```bash
+# Clone the repo
+git clone https://github.com/kylanj7/Qwen-14b-Instruct-Fine-Tune.git
+cd Qwen-14b-Instruct-Fine-Tune
+
+# Build the image
+docker build -t qwen-lab .
+
+# Run training (interactive mode)
+docker run --gpus all -it \
+  -v $(pwd)/outputs:/app/outputs \
+  -v $(pwd)/models:/app/models \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  qwen-lab
+
+# Run with specific config
+docker run --gpus all -it \
+  -v $(pwd)/outputs:/app/outputs \
+  -v $(pwd)/models:/app/models \
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  qwen-lab --model qwen2.5-14b-instruct --dataset chemistry
+```
+
+### Using Docker Compose (Easiest)
+
+```bash
+# Training
+docker compose run train
+
+# Evaluation
+docker compose run evaluate
+
+# Streamlit app (access at http://localhost:8501)
+docker compose up app
+```
+
+### Volume Mounts Explained
+
+| Mount | Purpose |
+|-------|---------|
+| `./outputs` | Training checkpoints and adapters |
+| `./models` | GGUF models for inference |
+| `~/.cache/huggingface` | Cached model downloads (saves bandwidth) |
 
 ## Troubleshooting
 

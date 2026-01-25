@@ -24,8 +24,10 @@ wandb
 click
 pillow
 pydantic>=2.10.0
+requests
 
-# Optional: Efficient Inference (if needed for evaluation)
-# llama-cpp-python is kept but ensure it matches the container's CUDA
-llama-cpp-python==0.3.16 
+# Streamlit UI
+streamlit
+
+# Inference (llama-cpp-python installed separately in Docker with CUDA)
 

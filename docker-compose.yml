@@ -1,0 +1,62 @@
+# =============================================================================
+# Qwen Fine-Tuning Lab - Docker Compose
+# =============================================================================
+#
+# Usage:
+#   docker compose run train              # Interactive training
+#   docker compose run evaluate           # Model evaluation
+#   docker compose up app                 # Streamlit UI (localhost:8501)
+#   docker compose run convert            # Convert to GGUF
+#
+# =============================================================================
+
+services:
+  # Base service with common settings
+  base:
+    build: .
+    image: qwen-lab
+    volumes:
+      - ./outputs:/app/outputs
+      - ./models:/app/models
+      - ./evaluation_results:/app/evaluation_results
+      - ./configs:/app/configs
+      - huggingface_cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Training service
+  train:
+    extends: base
+    stdin_open: true
+    tty: true
+    entrypoint: ["python", "train.py"]
+
+  # Evaluation service
+  evaluate:
+    extends: base
+    stdin_open: true
+    tty: true
+    entrypoint: ["python", "evaluate_model.py"]
+
+  # GGUF conversion service
+  convert:
+    extends: base
+    stdin_open: true
+    tty: true
+    entrypoint: ["python", "merge_and_convert_gguff.py"]
+
+  # Streamlit app
+  app:
+    extends: base
+    ports:
+      - "8501:8501"
+    entrypoint: ["streamlit", "run", "app.py", "--server.address", "0.0.0.0"]
+
+# Named volume for HuggingFace cache (persists across runs)
+volumes:
+  huggingface_cache:
