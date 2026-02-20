@@ -1,16 +1,72 @@
 # =============================================================================
-# Qwen Fine-Tuning Lab - Docker Compose
+# Qwen Fine Tune Test Suite - Docker Compose
 # =============================================================================
 #
-# Usage:
+# Full Stack Usage:
+#   docker compose up                     # Start all services (frontend + backend)
+#   docker compose up frontend backend    # Start web UI only
+#   docker compose up -d                  # Start in background
+#
+# Legacy Services (training/evaluation):
 #   docker compose run train              # Interactive training
 #   docker compose run evaluate           # Model evaluation
-#   docker compose up app                 # Streamlit UI (localhost:8501)
 #   docker compose run convert            # Convert to GGUF
+#   docker compose up streamlit           # Legacy Streamlit UI (localhost:8501)
 #
 # =============================================================================
 
 services:
+  # ===========================
+  # Full Stack Web Application
+  # ===========================
+
+  # Backend API (FastAPI)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: qwen-lab-backend
+    container_name: qwen-backend
+    volumes:
+      - ./outputs:/app/outputs
+      - ./models:/app/models
+      - ./evaluation_results:/app/evaluation_results
+      - ./configs:/app/configs
+      - ./train.py:/app/train.py
+      - ./evaluate_model.py:/app/evaluate_model.py
+      - ./merge_and_convert_gguff.py:/app/merge_and_convert_gguff.py
+      - ./qwen_suite.db:/app/qwen_suite.db
+      - huggingface_cache:/root/.cache/huggingface
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # Frontend (React + Vite)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: qwen-lab-frontend
+    container_name: qwen-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # ===========================
+  # Legacy Services
+  # ===========================
+
   # Base service with common settings
   base:
     build: .
@@ -50,8 +106,8 @@ services:
     tty: true
     entrypoint: ["python", "merge_and_convert_gguff.py"]
 
-  # Streamlit app
-  app:
+  # Legacy Streamlit app
+  streamlit:
     extends: base
     ports:
       - "8501:8501"

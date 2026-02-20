@@ -227,7 +227,7 @@ This file tracks all fine-tuning runs with their configurations and results.
 def print_header():
     """Print the application header."""
     print("=" * 80)
-    print("QWEN MODEL FINE-TUNING SYSTEM")
+    print("QWEN FINE TUNE TEST SUITE")
     print("=" * 80)
     print()
 
@@ -511,7 +511,13 @@ def load_and_prepare_dataset(dataset_config: Dict) -> Tuple[Dataset, Optional[Da
     print("=" * 80)
 
     # Load the dataset
-    dataset = load_dataset(dataset_name, split=split)
+    is_local = dataset_config.get('is_local', False)
+    if is_local:
+        # Local JSONL file - use json loader with data_files
+        dataset = load_dataset('json', data_files=dataset_name, split='train')
+    else:
+        # HuggingFace dataset
+        dataset = load_dataset(dataset_name, split=split)
     print(f"Dataset loaded: {len(dataset)} examples")
 
     # Create formatting function and apply it
@@ -645,10 +651,11 @@ def main():
     """Main entry point for the training pipeline."""
     import argparse
 
-    parser = argparse.ArgumentParser(description="Qwen Model Fine-Tuning System")
+    parser = argparse.ArgumentParser(description="Qwen Fine Tune Test Suite")
     parser.add_argument('--model', type=str, help='Model config name (e.g., qwen2.5-14b-instruct)')
     parser.add_argument('--dataset', type=str, help='Dataset config name (e.g., quantum)')
     parser.add_argument('--training', type=str, help='Training config name (e.g., default)')
+    parser.add_argument('--resume', type=str, help='Resume from checkpoint (e.g., outputs/checkpoint-100)')
     parser.add_argument('--no-confirm', action='store_true', help='Skip confirmation prompt')
     args = parser.parse_args()
 
@@ -758,10 +765,13 @@ def main():
     # Start training
     print()
     print("=" * 80)
-    print("STARTING TRAINING")
+    if args.resume:
+        print(f"RESUMING TRAINING FROM: {args.resume}")
+    else:
+        print("STARTING TRAINING")
     print("=" * 80)
 
-    trainer_stats = trainer.train()
+    trainer_stats = trainer.train(resume_from_checkpoint=args.resume)
 
     print()
     print("=" * 80)

@@ -7,7 +7,7 @@ import os
 
 # Page configuration
 st.set_page_config(
-    page_title="Fine-Tune LLM Test Lab",
+    page_title="Qwen Fine Tune Test Suite",
     page_icon="⚗️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -166,7 +166,7 @@ def stream_response(
                 }
 
 def main():
-    st.title("⚗️ Fine-Tune LLM Test Lab")
+    st.title("⚗️ Qwen Fine Tune Test Suite")
     st.markdown("Test and evaluate fine-tuned language models")
     
     # Sidebar - Model Selection and Configuration

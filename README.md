@@ -1,4 +1,4 @@
-# Qwen Fine-Tuning Lab
+# Qwen Fine Tune Test Suite
 
 A unified, configuration-driven pipeline for fine-tuning Qwen models on scientific datasets with automated evaluation.
 
@@ -289,8 +289,8 @@ Docker ensures everyone has the exact same environment regardless of their syste
 
 ```bash
 # Clone the repo
-git clone https://github.com/kylanj7/Qwen-14b-Instruct-Fine-Tune.git
-cd Qwen-14b-Instruct-Fine-Tune
+git clone https://github.com/kylanj7/Qwen-Fine-Tuning-Lab.git
+cd Qwen-Fine-Tuning-Lab
 
 # Build the image
 docker build -t qwen-lab .

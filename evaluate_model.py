@@ -14,6 +14,7 @@ The script will guide you through selecting:
 4. Number of samples
 """
 
+import argparse
 import json
 import os
 import sys
@@ -39,8 +40,9 @@ MODELS_DIR = Path(__file__).parent / "models" / "gguf"
 OUTPUT_DIR = Path(__file__).parent / "evaluation_results"
 
 # Hard-coded evaluation settings
-JUDGE_MODEL = "gpt-oss:120b"
+JUDGE_MODEL = "nemotron-3-nano:latest"
 RAG_MAX_PAPERS = 5
+MAX_RETRIES_ON_ZERO = 2  # Retry questions that score zero due to errors
 
 
 # =============================================================================
@@ -63,25 +65,53 @@ class OllamaClient:
         except Exception:
             return []
 
-    def generate(self, model: str, prompt: str, temperature: float = 0.0, max_tokens: int = 200) -> str:
-        """Generate a response."""
+    def generate(self, model: str, prompt: str, temperature: float = 0.0, max_tokens: int = 200, max_retries: int = 3) -> Optional[str]:
+        """Generate a response with retry logic."""
         payload = {
             "model": model,
             "prompt": prompt,
             "stream": False,
-            "options": {"temperature": temperature, "num_predict": max_tokens}
+            "options": {
+                "temperature": temperature,
+                "num_predict": max_tokens,
+                "num_gpu": 60,
+            }
         }
 
-        try:
-            response = self.session.post(
-                f"{self.base_url}/api/generate",
-                json=payload,
-                timeout=300
-            )
-            response.raise_for_status()
-            return response.json().get("response", "")
-        except Exception as e:
-            return f"[Error: {e}]"
+        for attempt in range(max_retries):
+            try:
+                response = self.session.post(
+                    f"{self.base_url}/api/generate",
+                    json=payload,
+                    timeout=300
+                )
+
+                # Handle 500 errors with retry
+                if response.status_code == 500:
+                    wait_time = 2 ** (attempt + 1)
+                    print(f"[Server error, retrying in {wait_time}s... ({attempt + 1}/{max_retries})]", end=" ", flush=True)
+                    time.sleep(wait_time)
+                    continue
+
+                response.raise_for_status()
+                return response.json().get("response", "")
+
+            except requests.exceptions.Timeout:
+                wait_time = 2 ** (attempt + 1)
+                print(f"[Timeout, retrying in {wait_time}s... ({attempt + 1}/{max_retries})]", end=" ", flush=True)
+                time.sleep(wait_time)
+                continue
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** (attempt + 1)
+                    print(f"[Error: {e}, retrying in {wait_time}s...]", end=" ", flush=True)
+                    time.sleep(wait_time)
+                    continue
+                print(f"[Error after {max_retries} attempts: {e}]")
+                return None
+
+        print(f"[Failed after {max_retries} attempts]")
+        return None
 
 
 # =============================================================================
@@ -92,7 +122,7 @@ class SemanticScholarRAG:
     """RAG client using Semantic Scholar API for grounding judge in academic truth."""
 
     BASE_URL = "https://api.semanticscholar.org/graph/v1"
-    SEARCH_FIELDS = "paperId,title,abstract,year,citationCount,authors"
+    SEARCH_FIELDS = "paperId,title,abstract,year,citationCount,authors,openAccessPdf,isOpenAccess"
 
     def __init__(self, max_papers: int = 3, cache_enabled: bool = True, api_key: Optional[str] = None):
         self.max_papers = max_papers
@@ -286,12 +316,15 @@ class SemanticScholarRAG:
 class GGUFModel:
     """Wrapper for GGUF model inference with streaming."""
 
-    def __init__(self, model_path: str, n_ctx: int = 2048, n_gpu_layers: int = -1):
+    def __init__(self, model_path: str, n_ctx: int = 2048, n_gpu_layers: int = -1, main_gpu: int = 0):
         print(f"\nLoading model: {model_path}")
+        print(f"Using GPU {main_gpu} only")
         self.llm = Llama(
             model_path=model_path,
             n_ctx=n_ctx,
             n_gpu_layers=n_gpu_layers,
+            main_gpu=main_gpu,
+            tensor_split=[1.0, 0.0, 0.0],  # 100% on GPU 0, 0% on GPUs 1 and 2
             verbose=False,
         )
         print("Model loaded!\n")
@@ -461,13 +494,16 @@ JUSTIFICATION: [brief explanation citing specific issues or strengths]"""
         judge_client: OllamaClient,
         dataset_config: Dict,
         max_samples: int,
+        judge_model: str = None,
+        output_json: bool = False,
     ):
         self.model = model
         self.model_name = model_name
         self.judge = judge_client
-        self.judge_model = JUDGE_MODEL
+        self.judge_model = judge_model or JUDGE_MODEL
         self.dataset_config = dataset_config
         self.max_samples = max_samples
+        self.output_json = output_json
 
         # Initialize RAG client (always enabled)
         self.rag = SemanticScholarRAG(max_papers=RAG_MAX_PAPERS)
@@ -536,9 +572,12 @@ JUSTIFICATION: [brief explanation citing specific issues or strengths]"""
         self.log(f"Test samples: {len(data)}\n")
         return data
 
-    def evaluate_one(self, item: Dict, idx: int, total: int) -> Dict:
+    def evaluate_one(self, item: Dict, idx: int, total: int, output_json: bool = False) -> Dict:
         question = item["question"]
         reference = item.get("reference", "")
+
+        # Progress marker (for backend parsing)
+        print(f"Evaluating sample {idx}/{total}", flush=True)
 
         # Header
         header = f"\n{'='*70}\n[{idx}/{total}] QUESTION\n{'='*70}"
@@ -554,8 +593,8 @@ JUSTIFICATION: [brief explanation citing specific issues or strengths]"""
         print(response_header)
         self.log(response_header)
 
-        # Stream model response
-        answer = self.model.generate_stream(question, max_tokens=1024, temperature=0.1)
+        # Stream model response (use higher token limit for complex technical questions)
+        answer = self.model.generate_stream(question, max_tokens=3072, temperature=0.1)
         self.log(answer)
 
         if not answer:
@@ -584,6 +623,10 @@ JUSTIFICATION: [brief explanation citing specific issues or strengths]"""
         }
 
         for paper in papers:
+            # Extract open access PDF URL if available
+            open_access_pdf = paper.get("openAccessPdf")
+            pdf_url = open_access_pdf.get("url") if open_access_pdf else None
+
             article_entry["papers_retrieved"].append({
                 "paper_id": paper.get("paperId"),
                 "title": paper.get("title"),
@@ -591,7 +634,9 @@ JUSTIFICATION: [brief explanation citing specific issues or strengths]"""
                 "authors": [a.get("name") for a in paper.get("authors", [])[:5]],
                 "citation_count": paper.get("citationCount", 0),
                 "abstract": paper.get("abstract", "")[:1000],
-                "semantic_scholar_url": f"https://www.semanticscholar.org/paper/{paper.get('paperId')}"
+                "semantic_scholar_url": f"https://www.semanticscholar.org/paper/{paper.get('paperId')}",
+                "is_open_access": paper.get("isOpenAccess", False),
+                "pdf_url": pdf_url,
             })
 
         self.article_logs.append(article_entry)
@@ -600,8 +645,22 @@ JUSTIFICATION: [brief explanation citing specific issues or strengths]"""
             print(f"found {len(papers)} sources")
             self.log(f"Retrieved context:\n{rag_context}")
         else:
-            print("no sources found")
-            self.log("No RAG context retrieved")
+            print("no sources found - SKIPPING QUESTION")
+            self.log("No RAG context retrieved - skipping question to avoid ungrounded scoring")
+            skip_msg = f"\n>>> SKIPPED: No relevant academic sources found for grounded evaluation\n"
+            print(skip_msg)
+            self.log(skip_msg)
+            skipped_result = {
+                "index": idx,
+                "question": question,
+                "answer": answer,
+                "reference": reference,
+                "topic": item.get("topic", ""),
+                "skipped": True,
+                "reason": "No Semantic Scholar articles found",
+            }
+            self.results.append(skipped_result)
+            return skipped_result
 
         # Judge fact-check
         judge_header = f"\n{'-'*70}\nJUDGE FACT-CHECK ({self.judge_model})\n{'-'*70}"
@@ -616,10 +675,31 @@ JUSTIFICATION: [brief explanation citing specific issues or strengths]"""
         )
 
         print("Fact-checking...", end=" ", flush=True)
-        judge_response = self.judge.generate(self.judge_model, judge_prompt, max_tokens=800)
+        judge_response = self.judge.generate(self.judge_model, judge_prompt, max_tokens=4096)
+
+        # Handle judge failure
+        if judge_response is None:
+            print("\n[Judge failed - skipping question]")
+            self.log("[Judge failed after retries - skipping question]")
+            skip_msg = f"\n>>> SKIPPED: Judge model failed to respond\n"
+            print(skip_msg)
+            self.log(skip_msg)
+            skipped_result = {
+                "index": idx,
+                "question": question,
+                "answer": answer,
+                "reference": reference,
+                "topic": item.get("topic", ""),
+                "skipped": True,
+                "reason": "Judge model failed",
+            }
+            self.results.append(skipped_result)
+            return skipped_result
 
         # Show raw judge response
         print(f"\n{judge_response}")
+
+        # Log judge response (already printed via streaming)
         self.log(f"[Judge response: {judge_response}]")
 
         # Parse multi-dimensional scores
@@ -637,10 +717,10 @@ JUSTIFICATION: [brief explanation citing specific issues or strengths]"""
             if match:
                 scores[key] = min(100, max(0, int(match.group(1))))
 
-        # Extract justification
+        # Extract justification (preserve full text for logging)
         just_match = re.search(r"JUSTIFICATION:\s*(.+)", judge_response, re.IGNORECASE | re.DOTALL)
         if just_match:
-            justification = just_match.group(1).strip()[:500]
+            justification = just_match.group(1).strip()
 
         # Calculate weighted average (50% accuracy, 30% completeness, 20% precision)
         overall_score = (
@@ -658,12 +738,16 @@ JUSTIFICATION: [brief explanation citing specific issues or strengths]"""
     ─────────────────────────────
     OVERALL:             {overall_score:5.1f}/100
 
-    Justification: {justification[:200]}{'...' if len(justification) > 200 else ''}"""
+>>> JUSTIFICATION:
+    {justification}"""
         print(score_display)
         self.log(score_display)
 
+        # Machine-readable score line (for backend parsing)
+        print(f"SCORES: factual_accuracy={scores['factual_accuracy']}, completeness={scores['completeness']}, technical_precision={scores['technical_precision']}", flush=True)
+
         # Running tally
-        self.results.append({
+        result_entry = {
             "index": idx,
             "question": question,
             "answer": answer,
@@ -672,16 +756,51 @@ JUSTIFICATION: [brief explanation citing specific issues or strengths]"""
             "overall_score": overall_score,
             "justification": justification,
             "topic": item.get("topic", ""),
-        })
+            "skipped": False,
+        }
+        self.results.append(result_entry)
 
-        running_scores = [r["overall_score"] for r in self.results]
-        running_avg = sum(running_scores) / len(running_scores)
+        # Calculate running average (exclude skipped questions)
+        scored_results = [r for r in self.results if not r.get("skipped", False)]
+        running_scores = [r["overall_score"] for r in scored_results]
+        running_avg = sum(running_scores) / len(running_scores) if running_scores else 0
 
         tally = f"\nRunning Average: {running_avg:.1f}/100 ({len(self.results)} questions)"
         print(tally)
         self.log(tally)
 
-        return self.results[-1]
+        # Output JSON for streaming (used by backend for WebSocket updates)
+        if output_json:
+            # Build RAG sources from article logs
+            rag_sources = []
+            if self.article_logs:
+                last_article = self.article_logs[-1]
+                for paper in last_article.get("papers_retrieved", []):
+                    rag_sources.append({
+                        "title": paper.get("title", ""),
+                        "year": paper.get("year"),
+                        "authors": paper.get("authors", []),
+                        "url": paper.get("semantic_scholar_url", ""),
+                        "pdf_url": paper.get("pdf_url"),
+                        "is_open_access": paper.get("is_open_access", False),
+                    })
+
+            json_result = {
+                "question_idx": idx - 1,  # 0-indexed for frontend
+                "question": question,
+                "model_response": answer,
+                "justification": justification,
+                "scores": {
+                    "factual_accuracy": scores["factual_accuracy"],
+                    "completeness": scores["completeness"],
+                    "technical_precision": scores["technical_precision"],
+                    "overall_score": overall_score,
+                },
+                "rag_sources": rag_sources,
+            }
+            print(json.dumps(json_result), flush=True)
+
+        return result_entry
 
     def run(self):
         # Write header to log
@@ -714,22 +833,98 @@ JUSTIFICATION: [brief explanation citing specific issues or strengths]"""
             print("No test data!")
             return
 
-        # Evaluate each item
+        # Evaluate each item with retry logic for failures
         for i, item in enumerate(test_data, 1):
-            self.evaluate_one(item, i, len(test_data))
+            result = self._evaluate_with_retry(item, i, len(test_data))
             time.sleep(0.2)
 
-        # Final results
-        total = len(self.results)
-        if total == 0:
-            print("No results!")
+        # Finalize and save results
+        self._finalize_results()
+
+    def _evaluate_with_retry(self, item: Dict, idx: int, total: int) -> Dict:
+        """Evaluate a question with automatic retry on failure."""
+        for attempt in range(MAX_RETRIES_ON_ZERO + 1):
+            result = self.evaluate_one(item, idx, total, output_json=self.output_json)
+
+            # Determine if we should retry
+            should_retry = False
+            retry_reason = ""
+
+            # Case 1: No response from model
+            if result.get("reason") == "No response":
+                should_retry = True
+                retry_reason = "no model response"
+
+            # Case 2: Judge model failed
+            elif result.get("skipped") and result.get("reason") == "Judge model failed":
+                should_retry = True
+                retry_reason = "judge model failed"
+
+            # Case 3: No RAG sources found (may succeed on retry with different keywords)
+            elif result.get("skipped") and "articles" in result.get("reason", "").lower():
+                should_retry = True
+                retry_reason = "no RAG sources"
+
+            # Case 4: All-zero scores (parse error or other failure)
+            elif not result.get("skipped"):
+                scores = result.get("scores", {})
+                overall = result.get("overall_score", -1)
+                if overall == 0 and all(scores.get(k, 0) == 0 for k in ["factual_accuracy", "completeness", "technical_precision"]):
+                    should_retry = True
+                    retry_reason = "all-zero scores (parse error)"
+
+            # If no retry needed or max retries reached, return result
+            if not should_retry or attempt >= MAX_RETRIES_ON_ZERO:
+                if attempt > 0 and not should_retry:
+                    print(f"[RETRY SUCCESS] Question {idx} succeeded on attempt {attempt + 1}")
+                return result
+
+            # Prepare for retry
+            print(f"\n{'!'*70}", flush=True)
+            print(f"RETRYING question {idx} (attempt {attempt + 2}/{MAX_RETRIES_ON_ZERO + 1})", flush=True)
+            print(f"Reason: {retry_reason}", flush=True)
+            print(f"{'!'*70}\n", flush=True)
+            self.log(f"[RETRY {attempt + 1}] Question {idx} - {retry_reason}")
+
+            # Remove the failed result before retrying
+            if self.results and self.results[-1].get("index") == idx:
+                self.results.pop()
+
+            # Also remove from article logs if present
+            if self.article_logs and self.article_logs[-1].get("question_index") == idx:
+                self.article_logs.pop()
+
+            time.sleep(2.0)  # Longer pause before retry
+
+        return result  # Return last attempt if all retries failed
+
+    def _finalize_results(self):
+        """Calculate final results and save to files."""
+        # Final results - separate skipped from scored
+        # Also exclude zero-score results that failed all retries
+        scored_results = [
+            r for r in self.results
+            if not r.get("skipped", False) and r.get("overall_score", 0) > 0
+        ]
+        skipped_results = [r for r in self.results if r.get("skipped", False)]
+        zero_score_results = [
+            r for r in self.results
+            if not r.get("skipped", False) and r.get("overall_score", 0) == 0
+        ]
+        total_scored = len(scored_results)
+        total_skipped = len(skipped_results)
+        total_zero = len(zero_score_results)
+        total_attempted = len(self.results)
+
+        if total_scored == 0:
+            print(f"No scored results! ({total_skipped} skipped, {total_zero} failed with zero scores)")
             return
 
-        # Aggregate scores
-        avg_factual = sum(r["scores"]["factual_accuracy"] for r in self.results) / total
-        avg_completeness = sum(r["scores"]["completeness"] for r in self.results) / total
-        avg_precision = sum(r["scores"]["technical_precision"] for r in self.results) / total
-        avg_overall = sum(r["overall_score"] for r in self.results) / total
+        # Aggregate scores (only from valid scored results)
+        avg_factual = sum(r["scores"]["factual_accuracy"] for r in scored_results) / total_scored
+        avg_completeness = sum(r["scores"]["completeness"] for r in scored_results) / total_scored
+        avg_precision = sum(r["scores"]["technical_precision"] for r in scored_results) / total_scored
+        avg_overall = sum(r["overall_score"] for r in scored_results) / total_scored
 
         final_header = f"\n\n{'='*70}\nFINAL RESULTS\n{'='*70}"
         print(final_header)
@@ -739,9 +934,9 @@ JUSTIFICATION: [brief explanation citing specific issues or strengths]"""
 Model:     {self.model_name}
 Dataset:   {self.domain}
 Judge:     {self.judge_model}
-Samples:   {total}
+Samples:   {total_scored} scored, {total_skipped} skipped, {total_zero} failed
 
-DIMENSION SCORES (averaged):
+DIMENSION SCORES (averaged over {total_scored} valid questions):
 ─────────────────────────────────────
   Factual Accuracy:    {avg_factual:5.1f}/100
   Completeness:        {avg_completeness:5.1f}/100
@@ -762,7 +957,10 @@ DIMENSION SCORES (averaged):
                     "judge_model": self.judge_model,
                     "dataset": self.dataset_config.get('dataset_name'),
                     "domain": self.domain,
-                    "samples": total,
+                    "samples_attempted": total_attempted,
+                    "samples_scored": total_scored,
+                    "samples_skipped": total_skipped,
+                    "samples_zero": total_zero,
                     "rag_source": "Semantic Scholar API",
                     "rag_papers": RAG_MAX_PAPERS,
                 },
@@ -771,7 +969,9 @@ DIMENSION SCORES (averaged):
                     "factual_accuracy": avg_factual,
                     "completeness": avg_completeness,
                     "technical_precision": avg_precision,
-                    "total_questions": total,
+                    "total_scored": total_scored,
+                    "total_skipped": total_skipped,
+                    "total_zero": total_zero,
                 },
                 "results": self.results,
             }, f, indent=2)
@@ -784,7 +984,7 @@ DIMENSION SCORES (averaged):
                     "dataset": self.dataset_config.get('dataset_name'),
                     "domain": self.domain,
                     "date": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    "total_questions": total,
+                    "total_questions": total_attempted,
                     "rag_source": "Semantic Scholar API",
                 },
                 "article_logs": self.article_logs,
@@ -799,23 +999,51 @@ DIMENSION SCORES (averaged):
 # Main
 # =============================================================================
 
+def parse_args():
+    """Parse command-line arguments for non-interactive mode."""
+    parser = argparse.ArgumentParser(description="Evaluate fine-tuned GGUF models")
+    parser.add_argument("--model", type=str, help="Path to GGUF model file")
+    parser.add_argument("--dataset", type=str, help="Dataset config name (e.g., 'Quantum Physics')")
+    parser.add_argument("--samples", type=int, default=10, help="Number of samples to evaluate")
+    parser.add_argument("--judge", type=str, default=JUDGE_MODEL, help="Ollama judge model name")
+    parser.add_argument("--output-json", action="store_true", help="Output JSON for parsing")
+    return parser.parse_args()
+
+
 def main():
-    print_header()
+    args = parse_args()
+
+    # Check if running in non-interactive mode (all required args provided)
+    non_interactive = args.model and args.dataset
+
+    if not non_interactive:
+        print_header()
 
     # Find GGUF models
     gguf_models = find_gguf_models()
-    if not gguf_models:
+    if not gguf_models and not args.model:
         print("ERROR: No GGUF models found in models/gguf/")
         print("Train a model first, then convert with merge_and_convert_gguff.py")
         sys.exit(1)
 
-    print(f"Found {len(gguf_models)} GGUF model(s)\n")
+    if not non_interactive:
+        print(f"Found {len(gguf_models)} GGUF model(s)\n")
 
     # Select model
-    model_names = [p.name for p in gguf_models]
-    selected_model_name = select_from_list(model_names, "Select model to evaluate:")
-    selected_model_path = MODELS_DIR / selected_model_name
-    print(f"  -> {selected_model_name}\n")
+    if args.model:
+        # Use provided model path
+        selected_model_path = Path(args.model)
+        selected_model_name = selected_model_path.name
+        if not selected_model_path.exists():
+            print(f"ERROR: Model file not found: {args.model}")
+            sys.exit(1)
+    else:
+        model_names = [p.name for p in gguf_models]
+        selected_model_name = select_from_list(model_names, "Select model to evaluate:")
+        selected_model_path = MODELS_DIR / selected_model_name
+
+    if not non_interactive:
+        print(f"  -> {selected_model_name}\n")
 
     # Select dataset
     dataset_configs = load_dataset_configs()
@@ -823,73 +1051,109 @@ def main():
         print("ERROR: No dataset configs found in configs/datasets/")
         sys.exit(1)
 
-    dataset_names = list(dataset_configs.keys())
-    dataset_displays = [f"{name} ({dataset_configs[name].get('dataset_name', '')})"
-                        for name in dataset_names]
+    if args.dataset:
+        # Find matching dataset config (by filename or display name)
+        dataset_name = None
+        for name, config in dataset_configs.items():
+            display_name = config.get('name', name)
+            if name.lower() == args.dataset.lower() or display_name.lower() == args.dataset.lower():
+                dataset_name = name
+                break
+        if not dataset_name:
+            available = [f"{k} ({v.get('name', k)})" for k, v in dataset_configs.items()]
+            print(f"ERROR: Dataset config '{args.dataset}' not found")
+            print(f"Available: {', '.join(available)}")
+            sys.exit(1)
+        dataset_config = dataset_configs[dataset_name]
+    else:
+        dataset_names = list(dataset_configs.keys())
+        dataset_displays = [f"{name} ({dataset_configs[name].get('dataset_name', '')})"
+                            for name in dataset_names]
 
-    print()
-    print("Select dataset to test against:")
-    print("-" * 50)
-    for i, display in enumerate(dataset_displays, 1):
-        print(f"  [{i}] {display}")
-    print()
+        print()
+        print("Select dataset to test against:")
+        print("-" * 50)
+        for i, display in enumerate(dataset_displays, 1):
+            print(f"  [{i}] {display}")
+        print()
 
-    selected_idx = None
-    while selected_idx is None:
-        try:
-            choice = input(f"Select [1-{len(dataset_names)}]: ").strip()
-            idx = int(choice) - 1
-            if 0 <= idx < len(dataset_names):
-                selected_idx = idx
-            else:
-                print(f"Please enter 1-{len(dataset_names)}")
-        except ValueError:
-            print("Enter a number")
-        except KeyboardInterrupt:
-            print("\nCancelled.")
-            sys.exit(0)
+        selected_idx = None
+        while selected_idx is None:
+            try:
+                choice = input(f"Select [1-{len(dataset_names)}]: ").strip()
+                idx = int(choice) - 1
+                if 0 <= idx < len(dataset_names):
+                    selected_idx = idx
+                else:
+                    print(f"Please enter 1-{len(dataset_names)}")
+            except ValueError:
+                print("Enter a number")
+            except KeyboardInterrupt:
+                print("\nCancelled.")
+                sys.exit(0)
 
-    dataset_name = dataset_names[selected_idx]
-    dataset_config = dataset_configs[dataset_name]
-    print(f"  -> {dataset_name}\n")
+        dataset_name = dataset_names[selected_idx]
+        dataset_config = dataset_configs[dataset_name]
+
+    if not non_interactive:
+        print(f"  -> {dataset_name}\n")
 
     # Check Ollama for judge model
-    print()
+    judge_model = args.judge
     ollama = OllamaClient()
     judge_models = ollama.list_models()
 
-    if JUDGE_MODEL not in judge_models:
-        print(f"ERROR: Judge model '{JUDGE_MODEL}' not found in Ollama.")
+    # Match judge model (handle :latest suffix)
+    matched_judge = None
+    for available in judge_models:
+        if available == judge_model or available.startswith(f"{judge_model}:"):
+            matched_judge = available
+            break
+
+    if not matched_judge:
+        print(f"ERROR: Judge model '{judge_model}' not found in Ollama.")
         print(f"Available models: {', '.join(judge_models) if judge_models else 'none'}")
-        print(f"Pull the model with: ollama pull {JUDGE_MODEL}")
+        print(f"Pull the model with: ollama pull {judge_model}")
         sys.exit(1)
 
-    print(f"Judge model: {JUDGE_MODEL} [OK]")
+    judge_model = matched_judge
+
+    if not non_interactive:
+        print()
+        print(f"Judge model: {judge_model} [OK]")
 
     # Number of samples
-    print()
-    max_samples = get_number_input("Number of samples to evaluate", default=50, min_val=1, max_val=5000)
-    print(f"  -> {max_samples}\n")
+    if args.samples:
+        max_samples = args.samples
+    else:
+        print()
+        max_samples = get_number_input("Number of samples to evaluate", default=50, min_val=1, max_val=5000)
 
-    # Confirm
-    print()
-    print("=" * 70)
-    print("CONFIGURATION")
-    print("=" * 70)
-    print(f"Test Model:  {selected_model_name}")
-    print(f"Dataset:     {dataset_name}")
-    print(f"Judge Model: {JUDGE_MODEL}")
-    print(f"RAG:         Semantic Scholar ({RAG_MAX_PAPERS} papers)")
-    print(f"Samples:     {max_samples}")
-    print("=" * 70)
-    print()
+    if not non_interactive:
+        print(f"  -> {max_samples}\n")
 
-    if not get_yes_no("Start evaluation?", default=True):
-        print("Cancelled.")
-        sys.exit(0)
+    # Confirm (skip in non-interactive mode)
+    if not non_interactive:
+        print()
+        print("=" * 70)
+        print("CONFIGURATION")
+        print("=" * 70)
+        print(f"Test Model:  {selected_model_name}")
+        print(f"Dataset:     {dataset_name}")
+        print(f"Judge Model: {judge_model}")
+        print(f"RAG:         Semantic Scholar ({RAG_MAX_PAPERS} papers)")
+        print(f"Samples:     {max_samples}")
+        print("=" * 70)
+        print()
 
-    # Load model
-    model = GGUFModel(str(selected_model_path), n_ctx=2048, n_gpu_layers=-1)
+        if not get_yes_no("Start evaluation?", default=True):
+            print("Cancelled.")
+            sys.exit(0)
+    else:
+        print(f"Starting evaluation: {selected_model_name} on {dataset_name} ({max_samples} samples)")
+
+    # Load model (use larger context for complex technical questions)
+    model = GGUFModel(str(selected_model_path), n_ctx=4096, n_gpu_layers=-1)
 
     # Run evaluation
     evaluator = Evaluator(
@@ -898,6 +1162,8 @@ def main():
         judge_client=ollama,
         dataset_config=dataset_config,
         max_samples=max_samples,
+        judge_model=judge_model,
+        output_json=args.output_json,
     )
     evaluator.run()
 

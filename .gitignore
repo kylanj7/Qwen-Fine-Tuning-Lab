@@ -1,5 +1,5 @@
 # Model files (large binaries)
-models/gguf/*.gguf
+models/
 *.gguf
 
 # Python
@@ -36,6 +36,24 @@ llama.cpp/
 # Environment files
 .env
 .env.local
+
+# Temp merged models
+_temp_merged_*/
+
+# Datasets cache
+datasets/
+
+# Downloaded papers
+papers/
+
+# Database
+*.db
+
+# Logs
+*.log
+
+# Node modules
+node_modules/
 
 # OS files
 .DS_Store

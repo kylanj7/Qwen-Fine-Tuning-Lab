@@ -1,5 +1,5 @@
 # =============================================================================
-# Qwen Fine-Tuning Lab
+# Qwen Fine Tune Test Suite
 # =============================================================================
 # Multi-stage Dockerfile for training and inference
 #
