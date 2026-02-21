@@ -251,11 +251,19 @@ All training runs are logged to `training_log.md` with full configuration detail
 
 ## Available Models
 
-| Model | Size | Type |
-|-------|------|------|
-| `qwen2.5-14b-instruct-base-q4_k_m.gguf` | 8.4 GB | Base (untuned) |
-| `qwen_chemistry_merged-q4_k_m.gguf` | 8.4 GB | Fine-tuned on Chemistry |
-| `qwen_quantum_merged-q4_k_m.gguf` | 8.4 GB | Fine-tuned on Quantum Physics |
+Select any of these models when running `train.py`:
+
+| Config Name | Model | Size |
+|-------------|-------|------|
+| `qwen2.5-7b-instruct` | Qwen/Qwen2.5-7B-Instruct | 7B |
+| `qwen2.5-14b-instruct` | Qwen/Qwen2.5-14B-Instruct | 14B |
+| `qwen2.5-32b-instruct` | Qwen/Qwen2.5-32B-Instruct | 32B |
+| `qwen3-4b` | Qwen/Qwen3-4B | 4B |
+| `qwen3-8b` | Qwen/Qwen3-8B | 8B |
+| `qwen3-14b` | Qwen/Qwen3-14B | 14B |
+| `qwen3-32b` | Qwen/Qwen3-32B | 32B |
+
+All models are trained with 4-bit NF4 quantization via bitsandbytes. After training, use `merge_and_convert_gguff.py` to export to GGUF with your choice of quantization (q2_k, q3_k_s/m/l, q4_0, q4_k_s/m, q5_k_s/m, q6_k). Default is Q4_K_M.
 
 ## Available Datasets
 
