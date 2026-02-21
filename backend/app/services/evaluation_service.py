@@ -305,7 +305,7 @@ class EvaluationService:
                 return
 
             # Look for JSON results file
-            dataset_name = evaluation.dataset_config_name.lower().replace(" ", "_")
+            dataset_name = evaluation.dataset_config_name.lower()
             for filename in sorted(os.listdir(EVALUATION_RESULTS_DIR), reverse=True):
                 if filename.startswith(f"eval_{dataset_name}") and filename.endswith(".json"):
                     results_path = os.path.join(EVALUATION_RESULTS_DIR, filename)
