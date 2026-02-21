@@ -136,6 +136,30 @@ async def get_evaluation_results(evaluation_id: int, db: Session = Depends(get_d
 
     detailed_results = []
     if evaluation.detailed_results:
+        # If results lack rag_sources, try to load from articles file
+        sources_by_idx = {}
+        has_rag = any(r.get("rag_sources") for r in evaluation.detailed_results)
+        if not has_rag and evaluation.articles_file and os.path.exists(evaluation.articles_file):
+            try:
+                import json
+                with open(evaluation.articles_file, 'r') as af:
+                    articles_data = json.load(af)
+                for entry in articles_data.get("article_logs", []):
+                    q_idx = entry.get("question_index")
+                    sources_by_idx[q_idx] = [
+                        {
+                            "title": p.get("title", ""),
+                            "year": p.get("year"),
+                            "authors": p.get("authors", []),
+                            "url": p.get("semantic_scholar_url", ""),
+                            "pdf_url": p.get("pdf_url"),
+                            "is_open_access": p.get("is_open_access", False),
+                        }
+                        for p in entry.get("papers_retrieved", [])
+                    ]
+            except Exception:
+                pass
+
         for result in evaluation.detailed_results:
             # Handle both flat and nested score formats
             scores_data = result.get("scores", {})
@@ -153,6 +177,13 @@ async def get_evaluation_results(evaluation_id: int, db: Session = Depends(get_d
             if idx is None:
                 idx = result.get("index", 1) - 1  # Convert 1-based index to 0-based
 
+            # Get rag_sources from result, or fall back to articles file
+            rag_sources = result.get("rag_sources", [])
+            if not rag_sources:
+                # index in the result is 1-based, matching question_index in articles
+                result_index = result.get("index", idx + 1)
+                rag_sources = sources_by_idx.get(result_index, [])
+
             detailed_results.append(EvaluationDetailedResult(
                 question_idx=idx,
                 question=result.get("question", ""),
@@ -164,7 +195,7 @@ async def get_evaluation_results(evaluation_id: int, db: Session = Depends(get_d
                     technical_precision=scores_data.get("technical_precision"),
                     overall_score=scores_data.get("overall_score", result.get("overall_score"))
                 ),
-                rag_sources=result.get("rag_sources", [])
+                rag_sources=rag_sources,
             ))
 
     return EvaluationResultsResponse(

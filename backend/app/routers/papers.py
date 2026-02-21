@@ -123,13 +123,19 @@ async def download_paper_file(paper_id: int, db: Session = Depends(get_db)):
     if paper.status != RunStatus.COMPLETED or not paper.local_path:
         raise HTTPException(status_code=404, detail="PDF not available")
 
-    if not os.path.exists(paper.local_path):
+    file_path = paper.local_path
+    if not os.path.exists(file_path):
+        # Fallback: resolve filename relative to current PDF_DIR
+        from ..services.pdf_service import PDF_DIR
+        file_path = os.path.join(PDF_DIR, os.path.basename(paper.local_path))
+
+    if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="PDF file not found")
 
     return FileResponse(
-        paper.local_path,
+        file_path,
         media_type="application/pdf",
-        filename=os.path.basename(paper.local_path)
+        filename=os.path.basename(file_path)
     )
 
 

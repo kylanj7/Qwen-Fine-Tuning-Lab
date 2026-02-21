@@ -124,7 +124,7 @@ export default function Papers() {
                         size="sm"
                         onClick={() => window.open(papersApi.getFileUrl(paper.id), '_blank')}
                       >
-                        View PDF
+                        Download
                       </Button>
                     )}
                     {paper.status === 'failed' && (

@@ -746,6 +746,21 @@ JUSTIFICATION: [brief explanation citing specific issues or strengths]"""
         # Machine-readable score line (for backend parsing)
         print(f"SCORES: factual_accuracy={scores['factual_accuracy']}, completeness={scores['completeness']}, technical_precision={scores['technical_precision']}", flush=True)
 
+        # Build RAG sources from article logs for this question
+        rag_sources = []
+        if self.article_logs:
+            last_article = self.article_logs[-1]
+            if last_article.get("question_index") == idx:
+                for paper in last_article.get("papers_retrieved", []):
+                    rag_sources.append({
+                        "title": paper.get("title", ""),
+                        "year": paper.get("year"),
+                        "authors": paper.get("authors", []),
+                        "url": paper.get("semantic_scholar_url", ""),
+                        "pdf_url": paper.get("pdf_url"),
+                        "is_open_access": paper.get("is_open_access", False),
+                    })
+
         # Running tally
         result_entry = {
             "index": idx,
@@ -757,6 +772,7 @@ JUSTIFICATION: [brief explanation citing specific issues or strengths]"""
             "justification": justification,
             "topic": item.get("topic", ""),
             "skipped": False,
+            "rag_sources": rag_sources,
         }
         self.results.append(result_entry)
 
@@ -771,20 +787,6 @@ JUSTIFICATION: [brief explanation citing specific issues or strengths]"""
 
         # Output JSON for streaming (used by backend for WebSocket updates)
         if output_json:
-            # Build RAG sources from article logs
-            rag_sources = []
-            if self.article_logs:
-                last_article = self.article_logs[-1]
-                for paper in last_article.get("papers_retrieved", []):
-                    rag_sources.append({
-                        "title": paper.get("title", ""),
-                        "year": paper.get("year"),
-                        "authors": paper.get("authors", []),
-                        "url": paper.get("semantic_scholar_url", ""),
-                        "pdf_url": paper.get("pdf_url"),
-                        "is_open_access": paper.get("is_open_access", False),
-                    })
-
             json_result = {
                 "question_idx": idx - 1,  # 0-indexed for frontend
                 "question": question,

@@ -324,7 +324,41 @@ class EvaluationService:
 
                     # Store detailed results from "results" key (actual JSON structure)
                     if "results" in results:
-                        evaluation.detailed_results = results["results"]
+                        detailed = results["results"]
+
+                        # Merge rag_sources from articles file if results lack them
+                        if os.path.exists(articles_path):
+                            has_rag = any(r.get("rag_sources") for r in detailed)
+                            if not has_rag:
+                                try:
+                                    with open(articles_path, 'r') as af:
+                                        articles_data = json.load(af)
+                                    article_logs = articles_data.get("article_logs", [])
+                                    # Build index-to-sources mapping
+                                    sources_by_idx = {}
+                                    for entry in article_logs:
+                                        q_idx = entry.get("question_index")
+                                        papers = entry.get("papers_retrieved", [])
+                                        sources_by_idx[q_idx] = [
+                                            {
+                                                "title": p.get("title", ""),
+                                                "year": p.get("year"),
+                                                "authors": p.get("authors", []),
+                                                "url": p.get("semantic_scholar_url", ""),
+                                                "pdf_url": p.get("pdf_url"),
+                                                "is_open_access": p.get("is_open_access", False),
+                                            }
+                                            for p in papers
+                                        ]
+                                    # Merge into results
+                                    for r in detailed:
+                                        idx = r.get("index")
+                                        if idx in sources_by_idx:
+                                            r["rag_sources"] = sources_by_idx[idx]
+                                except Exception as e:
+                                    print(f"[EvalService] Error merging article logs: {e}")
+
+                        evaluation.detailed_results = detailed
 
                     evaluation.results_file = results_path
                     if os.path.exists(articles_path):
