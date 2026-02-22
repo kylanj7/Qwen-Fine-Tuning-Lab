@@ -119,6 +119,18 @@ class OllamaClient:
         print(f"[Failed after {max_retries} attempts]")
         return None
 
+    def unload_model(self, model: str):
+        """Unload a model from Ollama VRAM by setting keep_alive to 0."""
+        try:
+            print(f"Unloading judge model from VRAM...", flush=True)
+            self.session.post(
+                f"{self.base_url}/api/generate",
+                json={"model": model, "prompt": "", "keep_alive": 0},
+                timeout=30,
+            )
+        except Exception as e:
+            print(f"[Warning: could not unload judge: {e}]")
+
 
 # =============================================================================
 # Semantic Scholar RAG Client
@@ -710,6 +722,9 @@ JUSTIFICATION: [brief explanation citing specific issues or strengths]"""
 
         print("Fact-checking...", end=" ", flush=True)
         judge_response = self.judge.generate(self.judge_model, judge_prompt, max_tokens=4096)
+
+        # Unload judge from Ollama VRAM so test model can reload
+        self.judge.unload_model(self.judge_model)
 
         # Handle judge failure
         if judge_response is None:
