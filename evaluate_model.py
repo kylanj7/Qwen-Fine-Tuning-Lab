@@ -322,15 +322,12 @@ class SemanticScholarRAG:
 class GGUFModel:
     """Wrapper for GGUF model inference with streaming."""
 
-    def __init__(self, model_path: str, n_ctx: int = 2048, n_gpu_layers: int = -1, main_gpu: int = 0):
+    def __init__(self, model_path: str, n_ctx: int = 2048, n_gpu_layers: int = -1):
         print(f"\nLoading model: {model_path}")
-        print(f"Using GPU {main_gpu} only")
         self.llm = Llama(
             model_path=model_path,
             n_ctx=n_ctx,
             n_gpu_layers=n_gpu_layers,
-            main_gpu=main_gpu,
-            tensor_split=[1.0, 0.0, 0.0],  # 100% on GPU 0, 0% on GPUs 1 and 2
             verbose=False,
         )
         print("Model loaded!\n")
