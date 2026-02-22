@@ -1081,7 +1081,7 @@ def parse_args():
     parser.add_argument("--samples", type=int, default=None, help="Number of samples to evaluate")
     parser.add_argument("--judge", type=str, default=JUDGE_MODEL, help="Ollama judge model name")
     parser.add_argument("--output-json", action="store_true", help="Output JSON for parsing")
-    parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases tracking")
+    parser.add_argument("--no-wandb", action="store_true", help="Disable Weights & Biases tracking (enabled by default)")
     return parser.parse_args()
 
 
@@ -1227,9 +1227,9 @@ def main():
     else:
         print(f"Starting evaluation: {selected_model_name} on {dataset_name} ({max_samples} samples)")
 
-    # Initialize wandb if requested
+    # Initialize wandb (enabled by default, use --no-wandb to disable)
     wandb_run = None
-    if args.wandb:
+    if not args.no_wandb:
         if not WANDB_AVAILABLE:
             print("ERROR: wandb not installed. Run: pip install wandb")
             sys.exit(1)
