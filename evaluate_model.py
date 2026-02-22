@@ -323,17 +323,43 @@ class GGUFModel:
     """Wrapper for GGUF model inference with streaming."""
 
     def __init__(self, model_path: str, n_ctx: int = 2048, n_gpu_layers: int = -1):
-        print(f"\nLoading model: {model_path}")
+        self.model_path = model_path
+        self.n_ctx = n_ctx
+        self.n_gpu_layers = n_gpu_layers
+        self.llm = None
+        self.load()
+
+    def load(self):
+        """Load model into GPU memory."""
+        if self.llm is not None:
+            return
+        print(f"\nLoading test model into VRAM...", flush=True)
         self.llm = Llama(
-            model_path=model_path,
-            n_ctx=n_ctx,
-            n_gpu_layers=n_gpu_layers,
+            model_path=self.model_path,
+            n_ctx=self.n_ctx,
+            n_gpu_layers=self.n_gpu_layers,
             verbose=False,
         )
         print("Model loaded!\n")
 
+    def unload(self):
+        """Unload model from GPU memory to make room for judge."""
+        if self.llm is None:
+            return
+        print("Unloading test model from VRAM...", flush=True)
+        del self.llm
+        self.llm = None
+        import gc
+        gc.collect()
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except ImportError:
+            pass
+
     def generate_stream(self, prompt: str, max_tokens: int = 1024, temperature: float = 0.1):
-        """Generate with streaming output."""
+        """Generate with streaming output. Reloads model if it was unloaded."""
+        self.load()
         formatted = f"<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
 
         try:
@@ -666,6 +692,9 @@ JUSTIFICATION: [brief explanation citing specific issues or strengths]"""
             }
             self.results.append(skipped_result)
             return skipped_result
+
+        # Unload test model to free VRAM for judge
+        self.model.unload()
 
         # Judge fact-check
         judge_header = f"\n{'-'*70}\nJUDGE FACT-CHECK ({self.judge_model})\n{'-'*70}"
