@@ -29,6 +29,12 @@ import requests
 from datasets import load_dataset
 from llama_cpp import Llama
 
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+
 
 # =============================================================================
 # Configuration
@@ -40,7 +46,7 @@ MODELS_DIR = Path(__file__).parent / "models" / "gguf"
 OUTPUT_DIR = Path(__file__).parent / "evaluation_results"
 
 # Hard-coded evaluation settings
-JUDGE_MODEL = "nemotron-3-nano:latest"
+JUDGE_MODEL = "gpt-oss:120b"
 RAG_MAX_PAPERS = 5
 MAX_RETRIES_ON_ZERO = 2  # Retry questions that score zero due to errors
 
@@ -496,6 +502,7 @@ JUSTIFICATION: [brief explanation citing specific issues or strengths]"""
         max_samples: int,
         judge_model: str = None,
         output_json: bool = False,
+        wandb_run=None,
     ):
         self.model = model
         self.model_name = model_name
@@ -504,6 +511,7 @@ JUSTIFICATION: [brief explanation citing specific issues or strengths]"""
         self.dataset_config = dataset_config
         self.max_samples = max_samples
         self.output_json = output_json
+        self.wandb_run = wandb_run
 
         # Initialize RAG client (always enabled)
         self.rag = SemanticScholarRAG(max_papers=RAG_MAX_PAPERS)
@@ -785,6 +793,17 @@ JUSTIFICATION: [brief explanation citing specific issues or strengths]"""
         print(tally)
         self.log(tally)
 
+        # Log to wandb
+        if self.wandb_run:
+            self.wandb_run.log({
+                "question_idx": idx,
+                "factual_accuracy": scores["factual_accuracy"],
+                "completeness": scores["completeness"],
+                "technical_precision": scores["technical_precision"],
+                "overall_score": overall_score,
+                "running_avg": running_avg,
+            })
+
         # Output JSON for streaming (used by backend for WebSocket updates)
         if output_json:
             json_result = {
@@ -992,6 +1011,18 @@ DIMENSION SCORES (averaged over {total_scored} valid questions):
                 "article_logs": self.article_logs,
             }, f, indent=2)
 
+        # Log final summary to wandb
+        if self.wandb_run:
+            self.wandb_run.summary.update({
+                "final/overall_accuracy": avg_overall,
+                "final/factual_accuracy": avg_factual,
+                "final/completeness": avg_completeness,
+                "final/technical_precision": avg_precision,
+                "final/samples_scored": total_scored,
+                "final/samples_skipped": total_skipped,
+                "final/samples_failed": total_zero,
+            })
+
         print(f"\nLog saved:     {self.log_path}")
         print(f"JSON saved:    {self.json_path}")
         print(f"Articles log:  {self.articles_log_path}")
@@ -1006,9 +1037,10 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate fine-tuned GGUF models")
     parser.add_argument("--model", type=str, help="Path to GGUF model file")
     parser.add_argument("--dataset", type=str, help="Dataset config name (e.g., 'Quantum Physics')")
-    parser.add_argument("--samples", type=int, default=10, help="Number of samples to evaluate")
+    parser.add_argument("--samples", type=int, default=None, help="Number of samples to evaluate")
     parser.add_argument("--judge", type=str, default=JUDGE_MODEL, help="Ollama judge model name")
     parser.add_argument("--output-json", action="store_true", help="Output JSON for parsing")
+    parser.add_argument("--wandb", action="store_true", help="Enable Weights & Biases tracking")
     return parser.parse_args()
 
 
@@ -1154,6 +1186,26 @@ def main():
     else:
         print(f"Starting evaluation: {selected_model_name} on {dataset_name} ({max_samples} samples)")
 
+    # Initialize wandb if requested
+    wandb_run = None
+    if args.wandb:
+        if not WANDB_AVAILABLE:
+            print("ERROR: wandb not installed. Run: pip install wandb")
+            sys.exit(1)
+        dataset_tag = dataset_config.get('domain', dataset_name).lower().replace(' ', '-')
+        wandb_run = wandb.init(
+            project=f"qwen-fine-tune-test-accuracy-eval-{dataset_tag}",
+            config={
+                "model": selected_model_name,
+                "judge": judge_model,
+                "dataset": dataset_config.get('dataset_name'),
+                "domain": dataset_config.get('domain', dataset_name),
+                "samples": max_samples,
+                "rag_source": "Semantic Scholar",
+                "rag_papers": RAG_MAX_PAPERS,
+            },
+        )
+
     # Load model (use larger context for complex technical questions)
     model = GGUFModel(str(selected_model_path), n_ctx=4096, n_gpu_layers=-1)
 
@@ -1166,8 +1218,12 @@ def main():
         max_samples=max_samples,
         judge_model=judge_model,
         output_json=args.output_json,
+        wandb_run=wandb_run,
     )
     evaluator.run()
+
+    if wandb_run:
+        wandb_run.finish()
 
 
 if __name__ == "__main__":
